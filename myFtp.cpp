@@ -206,7 +206,6 @@ void getResponse(int socketFd){
 	char responseBuffer[256];
 	int bytesRead;
 
-
 	if ((bytesRead = recv(socketFd, responseBuffer, 255, 0)) == -1) {
 		fatal_error("recv error");
 	}
