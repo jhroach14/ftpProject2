@@ -17,7 +17,7 @@ using namespace std;
 void fatal_error(string output){
 
 	perror(strerror(errno));
-	//cout<<"\n"<<output<<'\n';
+	cout<<"\n"<<output<<'\n';
 	exit(EXIT_FAILURE);
 
 }
@@ -25,15 +25,15 @@ void fatal_error(string output){
 void error(string output){
 
 	perror(strerror(errno));
-	//cout<<"\n"<<output<<'\n';
+	cout<<"\n"<<output<<'\n';
 
 }
 
 void log(string message){
-	//cout<<message<<'\n';
+	cout<<message<<'\n';
 }
 
-int main(int argc, char *argv[]) {
+int main(int argc, char *argv[]){
 	FILE* sendFile;
 	FILE* receiveFile;
 
@@ -87,17 +87,10 @@ int main(int argc, char *argv[]) {
 
 	string input;
 
-	while(true){
+	while(true){//prompt loop
 		int needResponse = 0;
 		cout << "myftp>";
 		getline(cin,input);
-
-		if(send(socketFd,input.c_str(),input.length(),0)==-1){
-			fatal_error("send failed");
-		}
-
-
-		//cout << "User input "<<input<<" sent to server..." << endl;
 
 		if(!input.compare(0,2,"ls")){
 			needResponse = 1;
@@ -106,59 +99,147 @@ int main(int argc, char *argv[]) {
 			needResponse=1;
 		}
 
-		if(needResponse) {
-			char responseBuffer[256];
-			int bytesRead;
-			if ((bytesRead = recv(socketFd, responseBuffer, sizeof(responseBuffer), 0)) == 1) {
-				fatal_error("recv error");
-			}
-
-			responseBuffer[bytesRead] = '\0';
-
-			for (int i = 0; i < bytesRead; i++) {
-				printf("%c", responseBuffer[i]);
-			}
-		}
-
-		if(input.length()>2&&!input.compare(0,3,"get")){
-
-			int index = input.find(" ");
-			string fileName = input.substr(index+1);
-			receiveFile = fopen(fileName.c_str(), "w");
-			int len;
-			while((len = recv(socketFd, buffer, 256, 0) > 0)){
-				fwrite(buffer, sizeof(char), len, receiveFile);
-			}
-			fclose(receiveFile);
-
-		}
-
-		if(input.length()>2&&!input.compare(0,3,"put")){
-			//log("reached put");
-			int index = input.find(" ");
-			string fileName = input.substr(index);
-			sendFile = fopen(fileName.c_str(), "w");
-			fseek(sendFile, 0, SEEK_END);
-			long size = ftell(sendFile);
-			rewind(sendFile);
-			//log("reached rewind");
-			char sendBuffer[size];
-			fgets(sendBuffer, size, sendFile);
-			int n;
-			//log("reached while");
-			while((n = fread(sendBuffer, sizeof(char), size, sendFile)) > 0){
-				if(send(socketFd, sendBuffer, n, 0) < 0){
-					//cout << "Error sending file";
+		if(!input.compare(input.length()-1,1,"&")){//execute command in child process
+			input=input.substr(0, input.length()-1);
+			log("forking process to execute " + input);
+			int pid=fork();
+			if(pid==0){//child
+				if(send(socketFd,input.c_str(),input.length(),0)==-1){
+					fatal_error("send failed");
 				}
-				bzero(sendBuffer, size);
+				
+				//cout << "User input "<<input<<" sent to server..." << endl;
+
+				if(needResponse) {
+					log("CHILD executing command requiring response");
+					char responseBuffer[256];
+					int bytesRead;
+					if ((bytesRead = recv(socketFd, responseBuffer, sizeof(responseBuffer), 0)) == 1) {
+						fatal_error("recv error");
+					}
+
+					responseBuffer[bytesRead] = '\0';
+
+					for (int i = 0; i < bytesRead; i++) {
+						printf("%c", responseBuffer[i]);
+					}
+					log("CHILD finished printing server response");
+				}
+
+				if(input.length()>2&&!input.compare(0,3,"get")){
+					log("CHILD executing get");
+					int index = input.find(" ");
+					string fileName = input.substr(index+1);
+					receiveFile = fopen(fileName.c_str(), "w");
+					int len;
+					while((len = recv(socketFd, buffer, 256, 0) > 0)){
+						fwrite(buffer, sizeof(char), len, receiveFile);
+					}
+					fclose(receiveFile);
+
+				}
+
+				if(input.length()>2&&!input.compare(0,3,"put")){
+					log("CHILD executing put");
+					int index = input.find(" ");
+					string fileName = input.substr(index);
+					sendFile = fopen(fileName.c_str(), "w");
+					fseek(sendFile, 0, SEEK_END);
+					long size = ftell(sendFile);
+					rewind(sendFile);
+					//log("reached rewind");
+					char sendBuffer[size];
+					fgets(sendBuffer, size, sendFile);
+					int n;
+					//log("reached while");
+					while((n = fread(sendBuffer, sizeof(char), size, sendFile)) > 0){
+						if(send(socketFd, sendBuffer, n, 0) < 0){
+							//cout << "Error sending file";
+						}
+						bzero(sendBuffer, size);
+					}
+				}
+
+				if(!input.compare("quit")){
+					log("CHILD executing quit");
+					close(socketFd);
+					sleep(1);
+					return 0;
+
+				}
+				log("finished execution, killing CHILD");
+				raise(SIGKILL);
 			}
+			else{
+				waitpid((pid_t)pid, NULL, 0);
+				continue;
+			}	
 		}
+		else{//execute command normally (single process)
+			log("executing command in single process");
+			if(send(socketFd,input.c_str(),input.length(),0)==-1){
+					fatal_error("send failed");
+			}
 
-		if(!input.compare("quit")){
+			//cout << "User input "<<input<<" sent to server..." << endl;
 
-			close(socketFd);
-			sleep(1);
-			return 0;
+			if(needResponse) {
+				log("PARENT executing command requiring response");
+				char responseBuffer[256];
+				int bytesRead;
+				if ((bytesRead = recv(socketFd, responseBuffer, sizeof(responseBuffer), 0)) == 1) {
+					fatal_error("recv error");
+				}
+
+				responseBuffer[bytesRead] = '\0';
+
+				for (int i = 0; i < bytesRead; i++) {
+					printf("%c", responseBuffer[i]);
+				}
+				log("PARENT finished printing server response");
+			}
+
+			if(input.length()>2&&!input.compare(0,3,"get")){
+				log("PARENT executing get");
+				int index = input.find(" ");
+				string fileName = input.substr(index+1);
+				receiveFile = fopen(fileName.c_str(), "w");
+				int len;
+				while((len = recv(socketFd, buffer, 256, 0) > 0)){
+					fwrite(buffer, sizeof(char), len, receiveFile);
+				}
+				fclose(receiveFile);
+
+			}
+
+			if(input.length()>2&&!input.compare(0,3,"put")){
+				log("PARENT executing put");
+				int index = input.find(" ");
+				string fileName = input.substr(index);
+				sendFile = fopen(fileName.c_str(), "w");
+				fseek(sendFile, 0, SEEK_END);
+				long size = ftell(sendFile);
+				rewind(sendFile);
+				//log("reached rewind");
+				char sendBuffer[size];
+				fgets(sendBuffer, size, sendFile);
+				int n;
+				//log("reached while");
+				while((n = fread(sendBuffer, sizeof(char), size, sendFile)) > 0){
+					if(send(socketFd, sendBuffer, n, 0) < 0){
+						//cout << "Error sending file";
+					}
+					bzero(sendBuffer, size);
+				}
+			}
+
+			if(!input.compare("quit")){
+				log("PARENT executing quit");
+				close(socketFd);
+				sleep(1);
+				return 0;
+
+			}
 
 		}
 
@@ -202,8 +283,8 @@ int main(int argc, char *argv[]) {
 				}
 			}
 		}*/
-	}
+	}//end of prompt loop
 
 
 
-}
+}//end of main
