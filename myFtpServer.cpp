@@ -22,6 +22,21 @@ void fatal_error(string output){
 
 }
 
+struct node{
+	int process
+	string filename
+	int prid
+	node *next;
+}
+
+ Node(Node *next, int process, string filename, int prid){
+	 this->next = NULL;
+	 this->process = process;
+	 this->filename = filename;
+	 this->prid = prid;
+ }
+ 
+
 void error(string output){
 
 	perror(strerror(errno));
@@ -34,7 +49,9 @@ void log(string message){
 }
 
 int main(int argc, char *argv[]) {
-
+	node *head = NULL;
+	node *tail = NULL;
+	node *conductor = NULL;
 	int socketFd = -1;
 	int newSocketFd;
 	const char * portNum;
@@ -66,7 +83,7 @@ int main(int argc, char *argv[]) {
 		cout<<gai_strerror(code)<<'\n';
 		fatal_error("Error on addr info port");
 	}
-
+	
 	log("addr info success");
 
 	for(struct addrinfo *addrOption = serverInfo; addrOption!=NULL; addrOption = addrOption->ai_next){
@@ -106,25 +123,75 @@ int main(int argc, char *argv[]) {
 			fatal_error("accept error");
 		}
 		log("connection accepted");
+		
+		
+		// Processes input
+		int count=0;
+		while(count<10){
+			count++;
+			int readLength;
+			if((readLength = recv(newSocketFd,buffer,255,0))==-1){
+				fatal_error("CHILD read error");		
+			}		
+		}
+		buffer[readLength]='\0';
+		string input(buffer);
+		int length = (int) input.length();
+		log("CHILD input read:\n"+input);
+		cout<<"CHILD length: "<<length<<"\n";
+		
+		// Creates Node
+		if (!input.compare(0,3,"get") || !input.compare(0,3,"put"){
+			node *temp = new node;
+			// Asigns process, 0 = get, 1 = put
+			if (!input.compare(0,3,"get"))
+				temp->process = 0;
+			else
+				temp->process = 1;
+			
+			int index = input.find(" ");
+			string fileName = input.substr(index);
+			temp->filename = fileName;
+		}
+		
+		//Checks if it needs to block for other processes
+		node* conductor = head;
+		while(conductor != NULL){
+			if ((temp->process == 1) && (temp->filename == conductor->filename)){
+				waitpid(conductor->pwid, &status, 0)
+				sleep(10)
+				conductor == NULL;
+			}
+		}else ((temp->process == 0) && (conductor->process == 1) && (temp->filename == conductor->filename)){
+			waitpid(conductor->prid, &status, 0)
+			sleep(10)
+			conductor == NULL;
+		}
+		
+		
+		
+		// Adds Node to linked list
+		if (*head == NULL){
+			head = temp;
+			tail = temp;
+		}else{
+			conductor = head;
+			while(conductor->next != NULL;){
+				conductor = conductor->next;
+			}
+			conductor->next = temp;
+			tail = temp;
+		}
+		
+		
+		
+		
 		int pid =fork();
 		if(pid == 0){//child
 			close(socketFd);
 			int savedStdout;
 			int savedStderr;
-			int count=0;
-			while(count<10){
-				count++;
-				int readLength;
-				if((readLength = recv(newSocketFd,buffer,255,0))==-1){
-					fatal_error("CHILD read error");
-				}
-				buffer[readLength]='\0';
 
-				string input(buffer);
-				int length = (int) input.length();
-
-				log("CHILD input read:\n"+input);
-				cout<<"CHILD length: "<<length<<"\n";
 
 				if(!input.compare("quit")){
 					log("CHILD quit");
@@ -218,8 +285,12 @@ int main(int argc, char *argv[]) {
 					fclose(receiveFile);
 				}
 			}
-
 		}
+		
+		tail->prid = pid;
+		
+		
+		
 		close(newSocketFd);
 
 	}
