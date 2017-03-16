@@ -50,6 +50,61 @@ int main(int argc, char *argv[]){
 		printf("Usage %s hostname port\n", argv[0]);
 	}
 
+<<<<<<< HEAD
+=======
+	log(to_string(totalBytes)+" bytes received from server");
+
+	fclose(receiveFile);
+
+}
+
+void getResponse(int socketFd){
+
+	char responseBuffer[256];
+	int bytesRead;
+
+	if ((bytesRead = recv(socketFd, responseBuffer, 255, 0)) == -1) {
+		fatal_error("recv error");
+	}
+
+	responseBuffer[bytesRead] = '\0';
+	if(strcmp(responseBuffer, "ACK")!=0){//not ack means we need to wait
+		for (int i = 0; i < bytesRead; i++) {
+			printf("%c", responseBuffer[i]);
+		}
+		char ackBuf[3];
+		recv(socketFd,ackBuf,3,0);
+	}
+
+
+}
+
+int responseNeeded(string input){
+
+	int needResponse = 0;
+
+	if(!input.compare(0,2,"ls")){
+		needResponse = 1;
+	}else
+	if(!input.compare(0,3,"pwd")){
+		needResponse=1;
+	}/*else
+	if(!input.compare(0,3,"get")){
+		needResponse=1;
+	}else
+	if(!input.compare(0,3,"put")){
+		needResponse=1;
+	}*/
+
+	return needResponse;
+
+}
+
+int clientSocketSetup(char *argv[]){
+
+	struct addrinfo prepInfo;
+	struct addrinfo *serverInfo;
+>>>>>>> origin/master
 
 	memset(&prepInfo, 0, sizeof prepInfo);
 	prepInfo.ai_family = AF_UNSPEC;
