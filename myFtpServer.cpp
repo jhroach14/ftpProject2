@@ -185,11 +185,7 @@ int main(int argc, char *argv[]) {
 			head = temp;
 			tail = temp;
 		}else{
-			conductor = head;
-			while(conductor->next != NULL;){
-				conductor = conductor->next;
-			}
-			conductor->next = temp;
+			tail->next = temp;
 			tail = temp;
 		}
 		
