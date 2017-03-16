@@ -31,20 +31,6 @@ void clientCd(string input);
 void clientDelete(string input);
 void clientPutFile(string input, int newSocketFd);
 
-struct node{
-	int process
-	string filename
-	pid_t prid
-	node *next;
-}
-
-Node(Node *next, int process, string filename, pid_t prid){
-	 this->next = NULL;
-	 this->process = process;
-	 this->filename = filename;
-	 this->prid = prid;
- }
-
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wmissing-noreturn"
 int main(int argc, char *argv[]) {
@@ -53,9 +39,6 @@ int main(int argc, char *argv[]) {
 
 	int socketFd;
 	int newSocketFd;
-	node *head = NULL;
-	node *tail = NULL;
-	node *conductor = NULL;
 
 	//stop children becoming zombies
 	/*if (signal(SIGCHLD, SIG_IGN) == SIG_ERR) {
@@ -83,73 +66,9 @@ int main(int argc, char *argv[]) {
 			fatal_error("accept error");
 		}
 
-		// Processes input into string
-		char buffer[256];
-		int readLength;
-		if((readLength = recv(newSocketFd,buffer,256,0))==-1){//receive command from socket into buffer
-			fatal_error("CHILD read error");
-		}
-		buffer[readLength]='\0';
-
-		string input(buffer);//use buffer to create a string holding input
-		
-		// Creates Node
-		if (!input.compare(0,3,"get") || !input.compare(0,3,"put"){
-			node *temp = new node;
-			// Asigns process, 0 = get, 1 = put
-			if (!input.compare(0,3,"get"))
-				temp->process = 0;
-			else
-				temp->process = 1;
-			
-			int index = input.find(" ");
-			string fileName = input.substr(index);
-			temp->filename = fileName;
-		}
-		
-		//Checks if it needs to block for other processes
-		node* conductor = head;
-		while(conductor->next != NULL){
-			if ((temp->process == 1) && (temp->filename == conductor->next->filename)){
-				waitpid(conductor->next->pwid, &status, 0)
-				sleep(10)
-				
-				// Removes node
-				node *del = conductor->next;
-				conductor->next = conductor->next->next;
-				delete(del);
-				conductor == NULL;
-			}else ((temp->process == 0) && (conductor->next->process == 1) && (temp->filename == conductor->next->filename)){
-				waitpid(conductor->next->prid, &status, 0)
-				sleep(10)
-			
-				// Removes node
-				node *del = conductor->next;
-				conductor->next = conductor->next->next;
-				delete(del);
-				conductor == NULL;
-			}
-		}
-		
-		
-		
-		// Adds Node to linked list
-		if (*head == NULL){
-			head = temp;
-			tail = temp;
-		}else{
-			tail->next = temp;
-			tail = temp;
-		}
-
-		tail->prid = pid;
-		
 		log("connection accepted. forking child to handle requests");
 		int pid = fork();
 
-		
-		
-		
 		if(pid == 0){//child
 
 			log("CHILD says helloWorld");
@@ -158,7 +77,14 @@ int main(int argc, char *argv[]) {
 
 			while(true){//main child loop
 
+				char buffer[256];
+				int readLength;
+				if((readLength = recv(newSocketFd,buffer,256,0))==-1){//receive command from socket into buffer
+					fatal_error("CHILD read error");
+				}
+				buffer[readLength]='\0';
 
+				string input(buffer);//use buffer to create a string holding input
 
 				handleCommand(input,newSocketFd);
 			}
