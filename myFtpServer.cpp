@@ -11,6 +11,8 @@
 #include <arpa/inet.h>
 #include <sys/wait.h>
 #include <signal.h>
+#include <sys/ioctl.h>
+#include <math.h>
 
 using namespace std;
 
@@ -38,9 +40,9 @@ int main(int argc, char *argv[]) {
 	int newSocketFd;
 
 	//stop children becoming zombies
-	if (signal(SIGCHLD, SIG_IGN) == SIG_ERR) {
+	/*if (signal(SIGCHLD, SIG_IGN) == SIG_ERR) {
 		fatal_error("zombie stopped");
-	}
+	}*/
 
 	//ensure we get a port number
 	if(argc == 2 ){
@@ -98,13 +100,11 @@ int main(int argc, char *argv[]) {
 //utility methods to abstract logic from the main method
 void handleCommand(string input, int newSocketFd){
 
-	char buffer[256];
+
 	int savedStdout;
 	int savedStderr;
-	int length = (int) input.length();
 
-	log("CHILD input read:\n"+input);
-	log("CHILD input length: "+to_string(length)+"\n");
+	log("CHILD input: "+input);
 
 	/*savedStderr = dup(STDERR_FILENO);
 	dup2(newSocketFd, STDERR_FILENO);*/
@@ -123,12 +123,15 @@ void handleCommand(string input, int newSocketFd){
 
 		log("CHILD running ls");
 
-		savedStdout = dup(STDOUT_FILENO);
-		dup2(newSocketFd, STDOUT_FILENO);
+		savedStdout = dup(1);
+		close(1);
+		dup2(newSocketFd, 1);
 
-		system("ls");
+		if(system("ls")==-1){
+			error("ls failed");
+		}
 
-		dup2(savedStdout,STDOUT_FILENO);
+		dup2(savedStdout,1);
 
 	}
 
@@ -137,13 +140,15 @@ void handleCommand(string input, int newSocketFd){
 
 		log("CHILD running pwd");
 
-		savedStdout = dup(STDOUT_FILENO);
-		dup2(newSocketFd, STDOUT_FILENO);
+		savedStdout = dup(1);
+		close(1);
+		dup2(newSocketFd, 1);
 
-		system("pwd");
+		if(system("pwd")==-1){
+			error("pwd failed");
+		}
 
-		dup2(savedStdout,STDOUT_FILENO);
-
+		dup2(savedStdout,1);
 	}
 
 	// Removes file
@@ -156,7 +161,9 @@ void handleCommand(string input, int newSocketFd){
 	if(!input.compare(0,5,"mkdir")){
 
 		log("CHILD running mkdir");
-		system(input.c_str());
+		if(system(input.c_str())==-1){
+			error("mkdir failed");
+		}
 
 	}
 
@@ -186,7 +193,9 @@ void clientDelete(string input){
 	remove.append(filepath);
 
 	log("CHILD running delete on "+filepath);
-	system(remove.c_str());
+	if(system(remove.c_str())==-1){
+		error("delete failed");
+	}
 
 }
 
@@ -265,7 +274,7 @@ int serverSocketSetup(const char *portNum){
 void clientPutFile(string input, int newSocketFd){
 
 	int index = input.find(" ");
-	string fileName = input.substr(index);
+	string fileName = input.substr(index +1);
 
 	log("CHILD putting file "+fileName);
 
@@ -273,16 +282,32 @@ void clientPutFile(string input, int newSocketFd){
 	if((receiveFile = fopen(fileName.c_str(), "w"))==NULL){
 		error("file open failed for put file");
 	}
+	log("CHILD opened file for writing");
+
+	char sizeBuffer[64];
+	recv(newSocketFd,sizeBuffer,64,0);//sync1
+	if(send( newSocketFd, "ACK", 3, 0) < 0){//sync2
+		error("error sending file");
+	}
+
+	string sizeStr(sizeBuffer);
+	int size = stoi(sizeStr);
+	log("CHILD file size "+sizeStr);
 
 	int len;
 	int totalBytes=0;
 	char receiveBuffer[1024];
+	while(size>0){
 
-	while((len = recv(newSocketFd, receiveBuffer, 1024, 0) > 0)){
-
+		len = recv(newSocketFd, receiveBuffer, 1024, 0);//sync3
+		if(send( newSocketFd, "ACK", 3, 0) < 0){//sync4
+			error("error sending file");
+		}
 		totalBytes+=len;
 		fwrite(receiveBuffer, sizeof(char), len, receiveFile);
+		log(to_string(len)+" bytes received and written");
 
+		size -= len;
 	}
 
 	log("CHILD "+to_string(totalBytes)+" bytes received from client");
@@ -294,7 +319,7 @@ void clientPutFile(string input, int newSocketFd){
 void clientGetFile(string input, int newSocketFd){
 
 	int index = input.find(" ");
-	string fileName = input.substr(index);
+	string fileName = input.substr(index +1);
 
 	log("CHILD getting file" +fileName);
 
@@ -303,14 +328,30 @@ void clientGetFile(string input, int newSocketFd){
 		error("file open failed for get file");
 	}
 
+	fseek(sendFile,0,SEEK_END);
+	string size = to_string(ftell(sendFile));
+	rewind(sendFile);
+
+	log("CHILD file size "+size);
+	if(send( newSocketFd, size.c_str(), sizeof(size.c_str()), 0) < 0){//syc1
+		error("error sending file size");
+	}
+
+	char ackBuf[3];
+	recv(newSocketFd,ackBuf,3,0);//sync2
+	log(ackBuf);
+
 	char sendBuffer[1024];// 1 char = 1 byte
 	int numRead;
 	int totalBytes=0;
 	while((numRead = fread( sendBuffer, sizeof(char), 1024, sendFile)) > 0){
 
+		log("sending bytes");
 		if(send( newSocketFd, sendBuffer, numRead, 0) < 0){
 			error("error sending file");
 		}
+		recv(newSocketFd,ackBuf,3,0);//sync4
+		log(ackBuf);
 
 		totalBytes +=numRead;
 

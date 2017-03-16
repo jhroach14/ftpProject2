@@ -11,6 +11,7 @@
 #include <arpa/inet.h>
 #include <sys/wait.h>
 #include <signal.h>
+#include <sys/ioctl.h>
 
 using namespace std;
 
@@ -21,7 +22,7 @@ int responseNeeded(string input);
 void handleCommand(string input, int socketFd);
 int clientSocketSetup(char *argv[]);
 
-string getResponse(int socketFd);
+void getResponse(int socketFd);
 
 void error(string output);
 
@@ -41,8 +42,9 @@ int main(int argc, char *argv[]){
 	int socketFd;
 
 
-	if(argc < 2){
+	if(argc < 3){
 		printf("Usage %s hostname port\n", argv[0]);
+		exit(EXIT_FAILURE);
 	}
 
 	socketFd = clientSocketSetup(argv);
@@ -50,7 +52,6 @@ int main(int argc, char *argv[]){
 	string input;
 
 	while(true){//prompt loop
-
 		cout << "myftp>";
 		getline(cin,input);
 
@@ -62,11 +63,11 @@ int main(int argc, char *argv[]){
 
 void handleCommand(string input, int socketFd){
 
-	int needResponse = responseNeeded(input); //1 indicates the client expects a message back from server
-
 	if(send(socketFd,input.c_str(),input.length(),0)==-1){
 		fatal_error("send failed");
 	}
+
+	int needResponse = responseNeeded(input); //1 indicates the client expects a message back from server
 
 	if(!input.compare("quit")){
 		log("PARENT executing quit");
@@ -83,9 +84,7 @@ void handleCommand(string input, int socketFd){
 		if(needResponse) {
 
 			log("executing command requiring response");
-
-			string response = getResponse(socketFd);
-			cout<<response<<'\n';
+			getResponse(socketFd);
 
 		}
 
@@ -110,23 +109,38 @@ void handleCommand(string input, int socketFd){
 void putFileOnServer(string input, int socketFd){
 
 	int index = input.find(" ");
-	string fileName = input.substr(index);
+	string fileName = input.substr(index+1);
 
-	log("putting file" +fileName+" on server");
+	log("putting file " +fileName+" on server");
 
 	FILE * sendFile;
 	if((sendFile = fopen(fileName.c_str(), "r"))==NULL){
-		error("file open failed for put file");
+		error("file open failed for put file "+fileName);
 	}
+
+	fseek(sendFile,0,SEEK_END);
+	string size = to_string(ftell(sendFile));
+	rewind(sendFile);
+
+	log("filesize "+size);
+	if(send( socketFd, size.c_str(), sizeof(size.c_str()), 0) < 0){//syc1
+		error("error sending file size");
+	}
+	char ackBuf[3];
+	recv(socketFd,ackBuf,3,0);//sync2
+	log(ackBuf);
 
 	char sendBuffer[1024];// 1 char = 1 byte
 	int numRead;
 	int totalBytes=0;
 	while((numRead = fread( sendBuffer, sizeof(char), 1024, sendFile)) > 0){
 
-		if(send( socketFd, sendBuffer, numRead, 0) < 0){
+		log("sending bytes");
+		if(send( socketFd, sendBuffer, numRead, 0) < 0){//sync3
 			error("error sending file");
 		}
+		recv(socketFd,ackBuf,3,0);//sync4
+		log(ackBuf);
 
 		totalBytes +=numRead;
 
@@ -144,7 +158,7 @@ void putFileOnServer(string input, int socketFd){
 void getFileFromServer(string input,int socketFd){
 
 	int index = input.find(" ");
-	string fileName = input.substr(index);
+	string fileName = input.substr(index+1);
 
 	log("getting file "+fileName+" from server and writing to working directory");
 
@@ -152,16 +166,33 @@ void getFileFromServer(string input,int socketFd){
 	if((receiveFile = fopen(fileName.c_str(), "w"))==NULL){
 		error("file open failed for get file");
 	}
+	log("file opened for writing");
+
+	char sizeBuffer[64];
+	recv(socketFd,sizeBuffer,64,0);//sync1
+	if(send( socketFd, "ACK", 3, 0) < 0){//sync2
+		error("error sending file");
+	}
+
+	string sizeStr(sizeBuffer);
+	log("server file size "+sizeStr);
+	int size = stoi(sizeStr);
 
 	int len;
 	int totalBytes=0;
 	char receiveBuffer[1024];
 
-	while((len = recv(socketFd, receiveBuffer, 1024, 0) > 0)){
+	while(size>0){
 
+		len = recv(socketFd, receiveBuffer, 1024, 0);//sync3
+		if(send( socketFd, "ACK", 3, 0) < 0){//sync4
+			error("error sending file");
+		}
 		totalBytes+=len;
 		fwrite(receiveBuffer, sizeof(char), len, receiveFile);
+		log(to_string(len)+" bytes received and written");
 
+		size -= len;
 	}
 
 	log(to_string(totalBytes)+" bytes received from server");
@@ -170,18 +201,22 @@ void getFileFromServer(string input,int socketFd){
 
 }
 
-string getResponse(int socketFd){
+void getResponse(int socketFd){
 
 	char responseBuffer[256];
 	int bytesRead;
-	if ((bytesRead = recv(socketFd, responseBuffer, 256, 0)) == -1) {
+
+
+	if ((bytesRead = recv(socketFd, responseBuffer, 255, 0)) == -1) {
 		fatal_error("recv error");
 	}
 
 	responseBuffer[bytesRead] = '\0';
-	string response(responseBuffer);
 
-	return response;
+	for (int i = 0; i < bytesRead; i++) {
+		printf("%c", responseBuffer[i]);
+	}
+
 }
 
 int responseNeeded(string input){
@@ -193,13 +228,13 @@ int responseNeeded(string input){
 	}else
 	if(!input.compare(0,3,"pwd")){
 		needResponse=1;
-	}else
+	}/*else
 	if(!input.compare(0,3,"get")){
 		needResponse=1;
 	}else
 	if(!input.compare(0,3,"put")){
 		needResponse=1;
-	}
+	}*/
 
 	return needResponse;
 
@@ -219,7 +254,7 @@ int clientSocketSetup(char *argv[]){
 		cout<<gai_strerror(code)<<'\n';
 		fatal_error("Error on addr info");
 	}
-	int socketFd;
+	int socketFd=-1;
 	for(struct addrinfo *addrOption = serverInfo; addrOption!=NULL; addrOption = addrOption->ai_next){
 
 		if((socketFd = socket(addrOption->ai_family, addrOption->ai_socktype, addrOption->ai_protocol)) == -1){
@@ -243,7 +278,9 @@ int clientSocketSetup(char *argv[]){
 		fatal_error("socket creation failed");
 	}
 
-	log("Socket creation successful");
+	log("Socket creation successful with fd "+to_string(socketFd));
+
+	return socketFd;
 
 }
 
