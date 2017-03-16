@@ -212,10 +212,14 @@ void getResponse(int socketFd){
 	}
 
 	responseBuffer[bytesRead] = '\0';
-
-	for (int i = 0; i < bytesRead; i++) {
-		printf("%c", responseBuffer[i]);
+	if(strcmp(responseBuffer, "ACK")!=0){//not ack means we need to wait
+		for (int i = 0; i < bytesRead; i++) {
+			printf("%c", responseBuffer[i]);
+		}
+		char ackBuf[3];
+		recv(socketFd,ackBuf,3,0);
 	}
+
 
 }
 

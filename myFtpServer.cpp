@@ -130,8 +130,11 @@ void handleCommand(string input, int newSocketFd){
 		if(system("ls")==-1){
 			error("ls failed");
 		}
-
 		dup2(savedStdout,1);
+
+		if(send( newSocketFd, "ACK", 3, 0) < 0){//sync2
+			error("error sending file");
+		}
 
 	}
 
@@ -149,6 +152,10 @@ void handleCommand(string input, int newSocketFd){
 		}
 
 		dup2(savedStdout,1);
+
+		if(send( newSocketFd, "ACK", 3, 0) < 0){//sync2
+			error("error sending file");
+		}
 	}
 
 	// Removes file
