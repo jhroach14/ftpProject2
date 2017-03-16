@@ -243,46 +243,6 @@ int main(int argc, char *argv[]){
 
 		}
 
-		//Shutdown connection to be repopened on next iteration of loop
-		//shutdown(mySocket->mySocketFd, 2);
-
-		/*size_t found = input.find(" ");
-		if(found != string::npos){
-			//cout << "User input contains a space..." << endl;
-			char* inputArr = new char[input.length() + 1];
-			string firstWord(strtok(inputArr, " "));
-
-			//Getting a file from remote host
-			if(firstWord.compare("get") == 0){
-				int index = input.find(" ");
-				string fileName = input.substr(index);
-				receiveFile = fopen(fileName.c_str(), "w");
-				int len;
-				while((len = recv(socketFd, buffer, 256, 0) > 0)){
-					fwrite(buffer, sizeof(char), len, receiveFile);
-				}
-				fclose(receiveFile);
-
-			}
-				//Sending a file to remote host
-			else if(firstWord.compare("put") == 0){
-				int index = input.find(" ");
-				string fileName = input.substr(index);
-				sendFile = fopen(fileName.c_str(), "w");
-				fseek(sendFile, 0, SEEK_END);
-				long size = ftell(sendFile);
-				rewind(sendFile);
-				char sendBuffer[size];
-				fgets(sendBuffer, size, sendFile);
-				int n;
-				while((n = fread(sendBuffer, sizeof(char), size, sendFile)) > 0){
-					if(send(socketFd, sendBuffer, n, 0) < 0){
-						//cout << "Error sending file";
-					}
-					bzero(sendBuffer, size);
-				}
-			}
-		}*/
 	}//end of prompt loop
 
 
