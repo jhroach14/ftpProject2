@@ -76,7 +76,7 @@ int main(int argc, char *argv[]) {
 
 				char buffer[256];
 				int readLength;
-				if((readLength = recv(newSocketFd,buffer,255,0))==-1){//receive command from socket into buffer
+				if((readLength = recv(newSocketFd,buffer,256,0))==-1){//receive command from socket into buffer
 					fatal_error("CHILD read error");
 				}
 				buffer[readLength]='\0';
@@ -106,8 +106,8 @@ void handleCommand(string input, int newSocketFd){
 	log("CHILD input read:\n"+input);
 	log("CHILD input length: "+to_string(length)+"\n");
 
-	savedStderr = dup(STDERR_FILENO);
-	dup2(newSocketFd, STDERR_FILENO);
+	/*savedStderr = dup(STDERR_FILENO);
+	dup2(newSocketFd, STDERR_FILENO);*/
 
 	if(!input.compare("quit")){
 		clientQuit(newSocketFd);
@@ -173,7 +173,7 @@ void handleCommand(string input, int newSocketFd){
 
 	}
 
-	dup2(savedStderr,STDERR_FILENO);
+	/*dup2(savedStderr,STDERR_FILENO);*/
 
 }
 
@@ -302,17 +302,8 @@ void clientGetFile(string input, int newSocketFd){
 	if((sendFile = fopen(fileName.c_str(), "r"))==NULL){
 		error("file open failed for get file");
 	}
-	if(fseek(sendFile, 0, SEEK_END)==-1){
-		error("fseek failed for get file");
-	}
-	long size;
-	if((size= ftell(sendFile))==-1){
-		error("ftell failed on get file");
-	}
 
-	rewind(sendFile);
 	char sendBuffer[1024];// 1 char = 1 byte
-
 	int numRead;
 	int totalBytes=0;
 	while((numRead = fread( sendBuffer, sizeof(char), 1024, sendFile)) > 0){
@@ -336,7 +327,7 @@ void clientGetFile(string input, int newSocketFd){
 
 // user communication methods
 void log(string message){
-	cout<<message<<'\n';
+	cout << "LOG: " << message << '\n';
 }
 
 void fatal_error(string output){
