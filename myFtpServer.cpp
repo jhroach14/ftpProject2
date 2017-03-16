@@ -25,11 +25,11 @@ void fatal_error(string output){
 struct node{
 	int process
 	string filename
-	int prid
+	pid_t prid
 	node *next;
 }
 
- Node(Node *next, int process, string filename, int prid){
+ Node(Node *next, int process, string filename, pid_t prid){
 	 this->next = NULL;
 	 this->process = process;
 	 this->filename = filename;
@@ -156,16 +156,26 @@ int main(int argc, char *argv[]) {
 		
 		//Checks if it needs to block for other processes
 		node* conductor = head;
-		while(conductor != NULL){
-			if ((temp->process == 1) && (temp->filename == conductor->filename)){
-				waitpid(conductor->pwid, &status, 0)
+		while(conductor->next != NULL){
+			if ((temp->process == 1) && (temp->filename == conductor->next->filename)){
+				waitpid(conductor->next->pwid, &status, 0)
 				sleep(10)
+				
+				// Removes node
+				node *del = conductor->next;
+				conductor->next = conductor->next->next;
+				delete(del);
+				conductor == NULL;
+			}else ((temp->process == 0) && (conductor->next->process == 1) && (temp->filename == conductor->next->filename)){
+				waitpid(conductor->next->prid, &status, 0)
+				sleep(10)
+			
+				// Removes node
+				node *del = conductor->next;
+				conductor->next = conductor->next->next;
+				delete(del);
 				conductor == NULL;
 			}
-		}else ((temp->process == 0) && (conductor->process == 1) && (temp->filename == conductor->filename)){
-			waitpid(conductor->prid, &status, 0)
-			sleep(10)
-			conductor == NULL;
 		}
 		
 		
@@ -186,7 +196,7 @@ int main(int argc, char *argv[]) {
 		
 		
 		
-		int pid =fork();
+		pid_t pid =fork();
 		if(pid == 0){//child
 			close(socketFd);
 			int savedStdout;
