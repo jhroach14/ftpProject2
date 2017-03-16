@@ -29,7 +29,7 @@ struct node{
 	node *next;
 }
 
- Node(Node *next, int process, string filename, pid_t prid){
+Node(Node *next, int process, string filename, pid_t prid){
 	 this->next = NULL;
 	 this->process = process;
 	 this->filename = filename;
