@@ -63,9 +63,7 @@ int main(int argc, char *argv[]){
 
 void handleCommand(string input, int socketFd){
 
-	if(send(socketFd,input.c_str(),input.length(),0)==-1){
-		fatal_error("send failed");
-	}
+	
 
 	int needResponse = responseNeeded(input); //1 indicates the client expects a message back from server
 
@@ -81,6 +79,10 @@ void handleCommand(string input, int socketFd){
 
 		log("executing command in single process");
 
+
+		if(send(socketFd,input.c_str(),input.length(),0)==-1){
+			fatal_error("send failed");
+		}
 		if(needResponse) {
 
 			log("executing command requiring response");
@@ -101,6 +103,43 @@ void handleCommand(string input, int socketFd){
 		}
 
 	}else{//background
+		log("executing command in child process");
+		if(send(socketFd,input.substr(0,input.length()-1).c_str(),input.length(),0)==-1){
+			fatal_error("send failed");
+		}
+		int pid=fork();
+		if(pid==-1){
+			fatal_error("error forking");
+		}
+		if(pid == 0){
+			if(needResponse) {
+
+				log("executing command requiring response");
+				getResponse(socketFd);
+
+			}
+
+			if(!input.compare(0,3,"get")){
+
+				getFileFromServer(input,socketFd);
+
+			}
+
+			if(!input.compare(0,3,"put")){
+
+				putFileOnServer(input,socketFd);
+
+			}
+			log("child finish executing, killing child");
+			if(raise(SIGKILL) != 0){
+				fatal_error("error killing child process");
+			}
+		}
+		else{
+			if(waitpid((pid_t)pid, NULL, 0) == -1){
+				fatal_error("error waiting on child process");
+			}
+		}
 
 	}
 
