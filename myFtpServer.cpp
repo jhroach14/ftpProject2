@@ -335,8 +335,6 @@ int main(int argc, char *argv[]) {
 
 						if(input.find('&',0)!=string::npos){//if background transfer
 
-
-
 							BackgroundSocketInfo* backgroundSocketInfo = serverBackgroundSocketSetup(argv[1]);
 							if(send(newSocketFd,backgroundSocketInfo->portnum,4,0)==-1){
 								error("error on portnum send");

@@ -19,8 +19,8 @@ void log(string message);
 void fatal_error(string output);
 
 int responseNeeded(string input);
-void handleCommand(string input, int socketFd);
-int clientSocketSetup(char *argv[]);
+void handleCommand(string input, int socketFd,char* argv[]);
+int clientSocketSetup(char *argv[],int);
 
 void getResponse(int socketFd);
 
@@ -29,6 +29,8 @@ void error(string output);
 void getFileFromServer(string input,int socketFd);
 
 void putFileOnServer(string input, int socketFd);
+
+void getGPResponse(int socketFd);
 
 int debug = 1;
 
@@ -42,12 +44,12 @@ int main(int argc, char *argv[]){
 	int socketFd;
 
 
-	if(argc < 3){
-		printf("Usage %s hostname port\n", argv[0]);
+	if(argc < 4){
+		printf("Usage %s hostname nport tport\n", argv[0]);
 		exit(EXIT_FAILURE);
 	}
 
-	socketFd = clientSocketSetup(argv);
+	socketFd = clientSocketSetup(argv,2);
 
 	string input;
 
@@ -55,15 +57,13 @@ int main(int argc, char *argv[]){
 		cout << "myftp>";
 		getline(cin,input);
 
-		handleCommand(input, socketFd);
+		handleCommand(input, socketFd,argv);
 
 	}//end of prompt loop
 
 }//end of main
 
-void handleCommand(string input, int socketFd){
-
-	
+void handleCommand(string input, int socketFd,char* argv[]){
 
 	int needResponse = responseNeeded(input); //1 indicates the client expects a message back from server
 
@@ -83,6 +83,17 @@ void handleCommand(string input, int socketFd){
 		if(send(socketFd,input.c_str(),input.length(),0)==-1){
 			fatal_error("send failed");
 		}
+
+		if(!input.compare(0,3,"get")){
+			getGPResponse(socketFd);
+			getFileFromServer(input,socketFd);
+
+		}else
+		if(!input.compare(0,3,"put")){
+			getGPResponse(socketFd);
+			putFileOnServer(input,socketFd);
+
+		}else
 		if(needResponse) {
 
 			log("executing command requiring response");
@@ -90,56 +101,56 @@ void handleCommand(string input, int socketFd){
 
 		}
 
-		if(!input.compare(0,3,"get")){
+	}else
+	if(input.compare(0,3,"get")||input.compare(0,3,"put")){//background not get or put
 
-			getFileFromServer(input,socketFd);
+		input = input.substr(0,input.size()-1);//cut off ampersand then do normal
 
-		}
-
-		if(!input.compare(0,3,"put")){
-
-			putFileOnServer(input,socketFd);
-
-		}
-
-	}else{//background
-		log("executing command in child process");
-		if(send(socketFd,input.substr(0,input.length()-1).c_str(),input.length(),0)==-1){
+		if(send(socketFd,input.c_str(),input.length(),0)==-1){
 			fatal_error("send failed");
 		}
+		if(needResponse) {
+
+			log("executing command requiring response");
+			getResponse(socketFd);
+
+		}
+
+	}else{//get or put background
+		log("executing command in child process");
+		if(send(socketFd,input.c_str(),input.length(),0)==-1){
+			fatal_error("send failed");
+		}
+		getGPResponse(socketFd);
 		int pid=fork();
 		if(pid==-1){
 			fatal_error("error forking");
 		}
 		if(pid == 0){
-			if(needResponse) {
 
-				log("executing command requiring response");
-				getResponse(socketFd);
-
+			char portNum[4];
+			if(recv(socketFd,portNum,4,0)==-1){
+				error("recv portnum error");
 			}
+			if(send( socketFd, "ACK", 3, 0) < 0){//sync4
+				error("error ack portnum");
+			}
+
+			int backgroundSocketFd = clientSocketSetup(argv,3);
 
 			if(!input.compare(0,3,"get")){
 
 				getFileFromServer(input,socketFd);
 
-			}
-
+			}else
 			if(!input.compare(0,3,"put")){
 
 				putFileOnServer(input,socketFd);
 
 			}
 			log("child finish executing, killing child");
-			if(raise(SIGKILL) != 0){
-				fatal_error("error killing child process");
-			}
-		}
-		else{
-			if(waitpid((pid_t)pid, NULL, 0) == -1){
-				fatal_error("error waiting on child process");
-			}
-		}
+			exit(EXIT_SUCCESS);
+		}//end child
 
 	}
 
@@ -240,6 +251,34 @@ void getFileFromServer(string input,int socketFd){
 
 }
 
+void getGPResponse(int socketFd){
+
+	char responseBuffer[256];
+	int bytesRead;
+
+	if ((bytesRead = recv(socketFd, responseBuffer, 255, 0)) == -1) {
+		fatal_error("recv error");
+	}
+
+	responseBuffer[bytesRead] = '\0';
+
+	for (int i = 0; i < bytesRead; i++) {
+		printf("%c", responseBuffer[i]);
+	}
+
+	if(send( socketFd, "ACK", 3, 0) < 0){//sync4
+		error("error sending file");
+	}
+
+	char ackBuf[3];
+	if(recv(socketFd,ackBuf,3,0)==-1){
+		error("gpr ack error");
+	}
+	log(ackBuf);
+
+
+}
+
 void getResponse(int socketFd){
 
 	char responseBuffer[256];
@@ -270,19 +309,22 @@ int responseNeeded(string input){
 	}else
 	if(!input.compare(0,3,"pwd")){
 		needResponse=1;
-	}/*else
+	}
 	if(!input.compare(0,3,"get")){
 		needResponse=1;
 	}else
 	if(!input.compare(0,3,"put")){
 		needResponse=1;
-	}*/
+	} else
+	if(!input.compare(0,9,"terminate")){
+		needResponse = 1;
+	}
 
 	return needResponse;
 
 }
 
-int clientSocketSetup(char *argv[]){
+int clientSocketSetup(char *argv[],int portLoc){
 
 	struct addrinfo prepInfo;
 	struct addrinfo *serverInfo;
@@ -292,7 +334,7 @@ int clientSocketSetup(char *argv[]){
 	prepInfo.ai_socktype = SOCK_STREAM;
 
 	int code;
-	if((code = getaddrinfo(argv[1],argv[2],&prepInfo,&serverInfo))!=0){
+	if((code = getaddrinfo(argv[1],argv[portLoc],&prepInfo,&serverInfo))!=0){
 		cout<<gai_strerror(code)<<'\n';
 		fatal_error("Error on addr info");
 	}
