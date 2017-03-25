@@ -32,6 +32,8 @@ void putFileOnServer(string input, int socketFd);
 
 void getGPResponse(int socketFd);
 
+void terminateCommand(char*argv[],string input);
+
 int debug = 1;
 
 int main(int argc, char *argv[]){
@@ -68,13 +70,22 @@ void handleCommand(string input, int socketFd,char* argv[]){
 	int needResponse = responseNeeded(input); //1 indicates the client expects a message back from server
 
 	if(!input.compare("quit")){
-		log("PARENT executing quit");
+		log("executing quit");
+		if(send(socketFd,input.c_str(),input.length(),0)==-1){
+			fatal_error("send failed");
+		}
+		char ackBuf[3];
+		recv(socketFd,ackBuf,3,0);//commandID ack
+		log(ackBuf);
+		log("received quit ack");
 		close(socketFd);
 		sleep(1);
 		exit(EXIT_SUCCESS);
 
 	}
-
+	if(!input.compare(0,9,"terminate")){
+		terminateCommand(argv,input);
+	}else
 	if(input.compare(input.length()-1,1,"&")){//foreground
 
 		log("executing command in single process");
@@ -83,6 +94,10 @@ void handleCommand(string input, int socketFd,char* argv[]){
 		if(send(socketFd,input.c_str(),input.length(),0)==-1){
 			fatal_error("send failed");
 		}
+		char ackBuf[3];
+		recv(socketFd,ackBuf,3,0);//commandID ack
+		log(ackBuf);
+		log("received foreground command ack");
 
 		if(!input.compare(0,3,"get")){
 			getGPResponse(socketFd);
@@ -102,13 +117,19 @@ void handleCommand(string input, int socketFd,char* argv[]){
 		}
 
 	}else
-	if(input.compare(0,3,"get")||input.compare(0,3,"put")){//background not get or put
+	if((input.compare(0,3,"get")!=0)&&(input.compare(0,3,"put")!=0)){//background not get or put
+
+		log("executing command in child process");
 
 		input = input.substr(0,input.size()-1);//cut off ampersand then do normal
 
 		if(send(socketFd,input.c_str(),input.length(),0)==-1){
 			fatal_error("send failed");
 		}
+		char ackBuf[3];
+		recv(socketFd,ackBuf,3,0);//commandID ack
+		log(ackBuf);
+		log("received background command ack");
 		if(needResponse) {
 
 			log("executing command requiring response");
@@ -117,42 +138,85 @@ void handleCommand(string input, int socketFd,char* argv[]){
 		}
 
 	}else{//get or put background
-		log("executing command in child process");
+		log("executing get/put command in background");
 		if(send(socketFd,input.c_str(),input.length(),0)==-1){
 			fatal_error("send failed");
 		}
+		log("command sent to server");
+
+		char ackBuf[3];
+		recv(socketFd,ackBuf,3,0);//commandID ack
+		log(ackBuf);
+		log("recieved background get/put command ack");
+
 		getGPResponse(socketFd);
+
+		log("waiting for port num");
+		char portNum[5];
+		if(recv(socketFd,portNum,4,0)==-1){
+			error("recv portnum error");
+		}
+		portNum[4] = '\0';
+
+		log("recieved portnum sending ack");
+		if(send( socketFd, "ACK", 3, 0) < 0){//ack portnum
+			error("error ack portnum");
+		}
+
 		int pid=fork();
 		if(pid==-1){
 			fatal_error("error forking");
 		}
 		if(pid == 0){
 
-			char portNum[4];
-			if(recv(socketFd,portNum,4,0)==-1){
-				error("recv portnum error");
-			}
-			if(send( socketFd, "ACK", 3, 0) < 0){//sync4
-				error("error ack portnum");
-			}
+			close(socketFd);
 
-			int backgroundSocketFd = clientSocketSetup(argv,3);
+			char * fakeArgv[3];
+			fakeArgv[1] = argv[1];
+			fakeArgv[2] = portNum;
+
+			int backgroundSocketFd = clientSocketSetup(fakeArgv,2);
+
+			input = input.substr(0,input.length()-1);
 
 			if(!input.compare(0,3,"get")){
 
-				getFileFromServer(input,socketFd);
+				getFileFromServer(input,backgroundSocketFd);
 
 			}else
 			if(!input.compare(0,3,"put")){
 
-				putFileOnServer(input,socketFd);
+				putFileOnServer(input,backgroundSocketFd);
 
 			}
+
+			close(backgroundSocketFd);
+
 			log("child finish executing, killing child");
 			exit(EXIT_SUCCESS);
 		}//end child
 
 	}
+
+}
+
+void terminateCommand(char*argv[],string input){
+
+	log("terminating command...");
+
+	int termSocketFd = clientSocketSetup(argv,3);//connect to terminate port
+
+	if(send(termSocketFd,input.c_str(),input.size(),0)==-1){
+		log("error on terminate send");
+	}
+
+	char buffer[256];
+	int readLength;
+	if((readLength = recv(termSocketFd,buffer,256,0))==-1){//receive command from socket into buffer
+		fatal_error("terminate recv error");
+	}
+	buffer[readLength]='\0';
+	log(buffer);
 
 }
 
@@ -219,7 +283,7 @@ void getFileFromServer(string input,int socketFd){
 	log("file opened for writing");
 
 	char sizeBuffer[64];
-	recv(socketFd,sizeBuffer,64,0);//sync1
+	recv(socketFd,sizeBuffer,64,0);//get file size
 	if(send( socketFd, "ACK", 3, 0) < 0){//sync2
 		error("error sending file");
 	}
@@ -231,23 +295,43 @@ void getFileFromServer(string input,int socketFd){
 	int len;
 	int totalBytes=0;
 	char receiveBuffer[1024];
+	int hasTerminated = 0;
 
 	while(size>0){
 
 		len = recv(socketFd, receiveBuffer, 1024, 0);//sync3
-		if(send( socketFd, "ACK", 3, 0) < 0){//sync4
-			error("error sending file");
+		string termString = "TERMINATED";
+		for(int i = 0;i<10;i++){
+			if(receiveBuffer[i]!=termString.at(i)){
+				break;
+			}
+			if(i==9){
+				log("command terminated. write interupted");
+				hasTerminated=1;
+				size = -1;
+			}
 		}
-		totalBytes+=len;
-		fwrite(receiveBuffer, sizeof(char), len, receiveFile);
-		log(to_string(len)+" bytes received and written");
+		if(hasTerminated!=1){
+			if(send( socketFd, "ACK", 3, 0) < 0){//sync4
+				error("error sending file");
+			}
 
-		size -= len;
+			totalBytes+=len;
+			fwrite(receiveBuffer, sizeof(char), len, receiveFile);
+			log(to_string(len)+" bytes received and written");
+
+			size -= len;
+		}
 	}
 
 	log(to_string(totalBytes)+" bytes received from server");
-
 	fclose(receiveFile);
+
+	if(hasTerminated==1){
+		if(remove(fileName.c_str())!=0){
+			error("error on get term delete");
+		}
+	}
 
 }
 
@@ -256,25 +340,23 @@ void getGPResponse(int socketFd){
 	char responseBuffer[256];
 	int bytesRead;
 
-	if ((bytesRead = recv(socketFd, responseBuffer, 255, 0)) == -1) {
+	log("waiting for command id");
+	if ((bytesRead = recv(socketFd, responseBuffer, 255, 0)) == -1) {//receive commandID
 		fatal_error("recv error");
+	}
+	log("received command id sending ack");
+	if(send( socketFd, "ACK", 3, 0) < 0){//ack command id
+		error("error sending file");
 	}
 
 	responseBuffer[bytesRead] = '\0';
 
+	cout<<"COMMAND ID: ";
 	for (int i = 0; i < bytesRead; i++) {
 		printf("%c", responseBuffer[i]);
 	}
+	cout<<'\n';
 
-	if(send( socketFd, "ACK", 3, 0) < 0){//sync4
-		error("error sending file");
-	}
-
-	char ackBuf[3];
-	if(recv(socketFd,ackBuf,3,0)==-1){
-		error("gpr ack error");
-	}
-	log(ackBuf);
 
 
 }
@@ -284,17 +366,22 @@ void getResponse(int socketFd){
 	char responseBuffer[256];
 	int bytesRead;
 
+	log("waiting for server response");
 	if ((bytesRead = recv(socketFd, responseBuffer, 255, 0)) == -1) {
 		fatal_error("recv error");
 	}
 
+
 	responseBuffer[bytesRead] = '\0';
 	if(strcmp(responseBuffer, "ACK")!=0){//not ack means we need to wait
+
 		for (int i = 0; i < bytesRead; i++) {
 			printf("%c", responseBuffer[i]);
 		}
-		char ackBuf[3];
-		recv(socketFd,ackBuf,3,0);
+		log("recieved server response sending ack");
+		if(send(socketFd,"ACK",3,0)==-1){
+			error("response ack failed");
+		}
 	}
 
 
@@ -352,7 +439,7 @@ int clientSocketSetup(char *argv[],int portLoc){
 			//error("error on connect");
 			continue;
 		}
-		//log("connected");
+		log("connected to server");
 		freeaddrinfo(serverInfo);
 
 		break;
@@ -362,7 +449,7 @@ int clientSocketSetup(char *argv[],int portLoc){
 		fatal_error("socket creation failed");
 	}
 
-	log("Socket creation successful with fd "+to_string(socketFd));
+	log("Socket creation completed with fd "+to_string(socketFd));
 
 	return socketFd;
 
@@ -388,93 +475,3 @@ void log(string message){
 		cout << "LOG: " << message << '\n';
 	}
 }
-
-//cout << "User input "<<input<<" sent to server..." << endl;
-
-
-
-
-/*if(!input.compare(input.length()-1,1,"&")){//execute command in child process
-
-	input=input.substr(0, input.length()-1);
-	log("forking process to execute " + input);
-	int pid=fork();
-	if(pid==0){//child
-
-
-
-		if(send(socketFd,input.c_str(),input.length(),0)==-1){
-			fatal_error("send failed");
-		}
-
-		//cout << "User input "<<input<<" sent to server..." << endl;
-
-		if(needResponse) {
-			log("CHILD executing command requiring response");
-			char responseBuffer[256];
-			int bytesRead;
-			if ((bytesRead = recv(socketFd, responseBuffer, sizeof(responseBuffer), 0)) == 1) {
-				fatal_error("recv error");
-			}
-
-			responseBuffer[bytesRead] = '\0';
-
-			for (int i = 0; i < bytesRead; i++) {
-				printf("%c", responseBuffer[i]);
-			}
-			log("CHILD finished printing server response");
-		}
-
-		if(input.length()>2&&!input.compare(0,3,"get")){
-			log("CHILD executing get");
-			int index = input.find(" ");
-			string fileName = input.substr(index+1);
-			receiveFile = fopen(fileName.c_str(), "w");
-			int len;
-			while((len = recv(socketFd, buffer, 256, 0) > 0)){
-				fwrite(buffer, sizeof(char), len, receiveFile);
-			}
-			fclose(receiveFile);
-
-		}
-
-		if(input.length()>2&&!input.compare(0,3,"put")){
-			log("CHILD executing put");
-			int index = input.find(" ");
-			string fileName = input.substr(index);
-			sendFile = fopen(fileName.c_str(), "w");
-			fseek(sendFile, 0, SEEK_END);
-			long size = ftell(sendFile);
-			rewind(sendFile);
-			//log("reached rewind");
-			char sendBuffer[size];
-			fgets(sendBuffer, size, sendFile);
-			int n;
-			//log("reached while");
-			while((n = fread(sendBuffer, sizeof(char), size, sendFile)) > 0){
-				if(send(socketFd, sendBuffer, n, 0) < 0){
-					//cout << "Error sending file";
-				}
-				bzero(sendBuffer, size);
-			}
-		}
-
-		if(!input.compare("quit")){
-			log("CHILD executing quit");
-			close(socketFd);
-			sleep(1);
-			return 0;
-
-		}
-		log("finished execution, killing CHILD");
-		raise(SIGKILL);
-	}
-	else{
-		waitpid((pid_t)pid, NULL, 0);
-		continue;
-	}
-}
-else{*///execute command normally (single process)
-
-
-//}

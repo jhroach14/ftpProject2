@@ -96,6 +96,7 @@ string Command::getCommandId() {
 }
 
 void Command::terminateCommand() {
+	log("Command "+this->getCommandId()+" status set to terminate");
 	this->status = "terminate";
 }
 
@@ -125,11 +126,21 @@ string CommandQueue::terminateCommand(string input) {
 
 		if(!activeCommands.at(i)->getCommandId().compare(commandId)){
 			activeCommands.at(i)->terminateCommand();
+			log("command successfully set to terminate in activeCommands");
 			return "success";
 		}
-
 	}
 
+	for(int i =0; i < pendingCommands.size(); i++){
+
+		if(!pendingCommands.at(i)->getCommandId().compare(commandId)){
+			pendingCommands.at(i)->terminateCommand();
+			log("command successfully set to terminate in pendingCommands");
+			return "success";
+		}
+	}
+
+	log("command for termination not found in command queues");
 	return "not found";
 
 }
@@ -149,12 +160,14 @@ void CommandQueue::insertCommand(Command * command) {
 
 void CommandQueue::insertActive(Command* command){
 
+	log("Command with id "+command->getCommandId()+" inserted into active queue");
 	activeCommands.push_back(command);
 	command->status = "active";
 }
 
 void CommandQueue::insertPending(Command* command){
 
+	log("Command with id "+command->getCommandId()+" inserted into pending queue");
 	pendingCommands.push_back(command);
 	command->status = "pending";
 }
@@ -166,6 +179,7 @@ string CommandQueue::checkCommandStatus(Command * command) {
 	} else
 	if(!command->status.compare("pending")){
 		if(isFileNameActive(command->filename) == 0){
+			log("moving command with id "+command->getCommandId()+" from pending queue to active queue");
 			removeCommand(pendingCommands, command);
 			insertActive(command);
 			return command->status;
@@ -184,16 +198,24 @@ void CommandQueue::removeCommand(vector<Command *> commandVector, Command * comm
 
 	if(position!= commandVector.end()){
 		commandVector.erase(position);
+		log("command with id "+command->getCommandId()+" removed from command queue");
+	} else{
+		log("remove failed. command with id "+ command->getCommandId()+" ");
 	}
 
 }
 
 int CommandQueue::isFileNameActive(string fileName) {
+
+	log("checking "+fileName+" for active");
 	int isActive =0;
 
 	for(int i=0; i<activeCommands.size();i++){
-		if(!activeCommands.at(i)->filename.compare(fileName)){
+		string potential = activeCommands.at(i)->filename;
+		log("comparing "+potential+" with "+fileName+" for active");
+		if(!potential.compare(fileName)){
 			isActive = 1;
+			log(fileName+" is active");
 		}
 	}
 
@@ -249,6 +271,8 @@ int main(int argc, char *argv[]) {
 			struct sockaddr_storage clientAddress;
 			socklen_t socketLength = sizeof(clientAddress);
 
+			log("terminate thread waiting for connection");
+
 			if((newTermSocketFd = accept(termSocketFd,(struct sockaddr*)&clientAddress, &socketLength))==-1){
 				fatal_error("accept error");
 			}
@@ -270,6 +294,7 @@ int main(int argc, char *argv[]) {
 				buffer[readLength]='\0';
 
 				string input(buffer);//use buffer to create a string holding input
+				log("terminate received: "+input);
 
 				if(!input.compare(0,9,"terminate")){
 
@@ -296,6 +321,7 @@ int main(int argc, char *argv[]) {
 
 			struct sockaddr_storage clientAddress;
 			socklen_t socketLength = sizeof(clientAddress);
+			log("main server thread waiting for connection");
 
 			if((newSocketFd = accept(socketFd,(struct sockaddr*)&clientAddress, &socketLength))==-1){
 				fatal_error("accept error");
@@ -309,13 +335,17 @@ int main(int argc, char *argv[]) {
 				log("CHILD says helloWorld");
 
 				close(socketFd);//child has no use for parent's socket
-
-				while(true){//main child loop
-
+				int saftey=0;
+				while(saftey<65){//main child loop
+					saftey++;
 					char buffer[256];
 					int readLength;
 					if((readLength = recv(newSocketFd,buffer,256,0))==-1){//receive command from socket into buffer
 						fatal_error("CHILD read error");
+					}
+					log("received command sending ack to client");
+					if(send( newSocketFd, "ACK", 3, 0) < 0){//ack portnum
+						error("error ack portnum");
 					}
 					buffer[readLength]='\0';
 
@@ -325,27 +355,38 @@ int main(int argc, char *argv[]) {
 
 						Command * command = new Command(input);
 						commandQueue->insertCommand(command);
+						log("sending commandID to client");
 						if(send(newSocketFd,command->getCommandId().c_str(),command->getCommandId().size(),0)==-1){
 							error("error on commandID send");
 						}
 
+						log("waiting for commandID ack");
 						char ackBuf[3];
-						recv(newSocketFd,ackBuf,3,0);//sync2
+						recv(newSocketFd,ackBuf,3,0);//commandID ack
 						log(ackBuf);
+						log("recieved commandID ack");
 
 						if(input.find('&',0)!=string::npos){//if background transfer
 
-							BackgroundSocketInfo* backgroundSocketInfo = serverBackgroundSocketSetup(argv[1]);
+							log("background transfer inititated");
+
+							BackgroundSocketInfo* backgroundSocketInfo = serverBackgroundSocketSetup(argv[2]);
+							log("sending port number");
 							if(send(newSocketFd,backgroundSocketInfo->portnum,4,0)==-1){
 								error("error on portnum send");
 							}
+							log("waiting for portnum ack");
 							recv(newSocketFd,ackBuf,3,0);//sync2
 							log(ackBuf);
+							log("received portnum ack");
+							log("waiting for background transfer connection ");
 
 							int newBackgroundSocketFd;
 							if((newBackgroundSocketFd = accept(backgroundSocketInfo->fd,(struct sockaddr*)&clientAddress, &socketLength))==-1){
 								fatal_error("accept error");
 							}
+
+							log("background transfer connection accepted");
 
 							int backgroundpid = fork();
 
@@ -368,12 +409,15 @@ int main(int argc, char *argv[]) {
 						int index = input.find(" ");
 						string filepath = input.substr(index+1);
 
+						log("delete requested on file "+filepath);
+
 						int whereIsIt=0;
 						Command* command;
 						for(int i=0;i<commandQueue->activeCommands.size();i++){
 							if(commandQueue->activeCommands.at(i)->filename.compare(filepath)){
 								whereIsIt=1;
 								command = commandQueue->activeCommands.at(i);
+								log("file to be deleted is in active queue");
 							}
 						}
 						if(whereIsIt!=1){
@@ -382,11 +426,13 @@ int main(int argc, char *argv[]) {
 								if(commandQueue->pendingCommands.at(i)->filename.compare(filepath)){
 									whereIsIt=1;
 									command = commandQueue->pendingCommands.at(i);
+									log("file to be deleted is in pending queue");
 								}
 							}
 						}
 
 						if(whereIsIt == 0){
+							log("client to be deleted is in no queue's");
 							clientDelete(input);
 						} else
 						if(whereIsIt == 1){
@@ -416,6 +462,8 @@ int main(int argc, char *argv[]) {
 //utility methods to abstract logic from the main method
 
 void handleSpecialCommand(Command* command, CommandQueue* commandQueue, int newTermSocketFd){
+
+	log("CHILD command: "+command->getCommandId());
 
 	int done = 0;
 	//Client requests file
@@ -475,6 +523,8 @@ void handleCommand(string input, int newSocketFd){
 
 	if(!input.compare("quit")){
 		clientQuit(newSocketFd);
+		close(newSocketFd);
+		exit(EXIT_SUCCESS);
 	}
 
 	//Changes directory
@@ -496,9 +546,10 @@ void handleCommand(string input, int newSocketFd){
 		}
 		dup2(savedStdout,1);
 
-		if(send( newSocketFd, "ACK", 3, 0) < 0){//sync2
-			error("error sending file");
-		}
+		log("ls output sent waiting for ack");
+		char ackBuf[3];
+		recv(newSocketFd,ackBuf,3,0);
+		log("ls ack recieved");
 
 	}
 
@@ -517,9 +568,10 @@ void handleCommand(string input, int newSocketFd){
 
 		dup2(savedStdout,1);
 
-		if(send( newSocketFd, "ACK", 3, 0) < 0){//sync2
-			error("error sending file");
-		}
+		log("pwd output sent waiting for ack");
+		char ackBuf[3];
+		recv(newSocketFd,ackBuf,3,0);
+		log("pwd ack recieved");
 	}
 	// makes new directory on FTP server
 	if(!input.compare(0,5,"mkdir")){
@@ -622,7 +674,7 @@ int serverSocketSetup(const char *portNum){
 	return socketFd;
 }
 
-BackgroundSocketInfo* serverBackgroundSocketSetup(const char *portNum){
+BackgroundSocketInfo* serverBackgroundSocketSetup(const char *portNum) {
 
 	int socketFd = -1;
 	struct addrinfo prepInfo;
@@ -634,26 +686,24 @@ BackgroundSocketInfo* serverBackgroundSocketSetup(const char *portNum){
 	prepInfo.ai_flags = AI_PASSIVE; // sets local host
 
 	int socketBound = 0;
-	while(socketBound==0){
-
-		portNum = incrementPort(portNum);
+	while (socketBound == 0) {
 
 		int code;
-		if((code=getaddrinfo(NULL,portNum,&prepInfo,&serverInfo))!=0){//uses prep info to fill server info
-			cout<<gai_strerror(code)<<'\n';
+		if ((code = getaddrinfo(NULL, "0", &prepInfo, &serverInfo)) != 0) {//uses prep info to fill server info
+			cout << gai_strerror(code) << '\n';
 			fatal_error("Error on addr info port");
 		}
 
 		log("addr info success");
 
-		for(struct addrinfo *addrOption = serverInfo; addrOption!=NULL; addrOption = addrOption->ai_next){
+		for (struct addrinfo *addrOption = serverInfo; addrOption != NULL; addrOption = addrOption->ai_next) {
 
-			if((socketFd = socket(addrOption->ai_family, addrOption->ai_socktype, addrOption->ai_protocol)) == -1){
+			if ((socketFd = socket(addrOption->ai_family, addrOption->ai_socktype, addrOption->ai_protocol)) == -1) {
 				error("socket creation failed");
 				continue;
 			}
 			log("socket created");
-			if(bind(socketFd, addrOption->ai_addr, addrOption->ai_addrlen) == -1){
+			if (bind(socketFd, addrOption->ai_addr, addrOption->ai_addrlen) == -1) {
 				close(socketFd);
 				error("bind failed");
 				continue;
@@ -665,16 +715,26 @@ BackgroundSocketInfo* serverBackgroundSocketSetup(const char *portNum){
 		}
 	}
 
-	if(socketFd == -1){
+	if (socketFd == -1) {
 		fatal_error("socket creation failed");
 	}
 
-	if(listen(socketFd, 5) == -1){
+	if (listen(socketFd, 5) == -1) {
 		fatal_error("error on listen");
 	}
 	log("socket listening");
 
-	return new BackgroundSocketInfo(socketFd,portNum);
+	string port = "null";
+
+	struct sockaddr_in sin;
+	socklen_t len = sizeof(sin);
+	if (getsockname(socketFd, (struct sockaddr *) &sin, &len) == -1){
+		error("getsockname");
+	}else{
+	port = to_string(ntohs(sin.sin_port));
+	}
+
+	return new BackgroundSocketInfo(socketFd,port.c_str());
 }
 
 const char * incrementPort(const char* portChar){
@@ -686,7 +746,17 @@ const char * incrementPort(const char* portChar){
 	strValue >> intport;
 	intport++;
 
-	return to_string(intport).c_str();
+	char chrarray[5];
+	to_string(intport).copy(chrarray,4);
+	chrarray[4] = '\0';
+	const char * constarray = chrarray;
+
+	cout<<"port incremented to ";
+	for(int i=0;i<5;i++){
+		cout<<chrarray[i];
+	}
+	cout<<'\n';
+	return constarray;
 }
 
 void clientPutFile(Command* command, int newSocketFd){
@@ -734,13 +804,16 @@ void clientPutFile(Command* command, int newSocketFd){
 			break;
 		}
 
+		log("sleeping 4 sec to help debug concurrency");
+		usleep(4000);
+
 	}
 
 	log("CHILD "+to_string(totalBytes)+" bytes received from client");
 	fclose(receiveFile);
 
 	if(hasTerminated==1){
-		if(remove(fileName)!=0){
+		if(remove(fileName.c_str())!=0){
 			error("error on get term delete");
 		}
 	}
@@ -751,7 +824,7 @@ void clientGetFile(Command *command, int newSocketFd) {
 
 	string fileName = command->filename;
 
-	log("CHILD getting file" +fileName);
+	log("CHILD getting file " +fileName);
 
 	FILE * sendFile;
 	if((sendFile = fopen(fileName.c_str(), "r"))==NULL){
@@ -789,19 +862,18 @@ void clientGetFile(Command *command, int newSocketFd) {
 		bzero(sendBuffer,1024);
 
 		if(!command->status.compare("terminate")){
-			hasTerminated = 1;
+
+			if(send( newSocketFd, "TERMINATED", 10, 0) < 0){
+				error("error sending term notice");
+			}
 			break;
 		}
+		log("sleeping to help debug concurrency");
+		usleep(1000000);
 	}
 
 	log("CHILD "+to_string(totalBytes)+" bytes sent to client");
 	fclose(sendFile);
-
-	if(hasTerminated==1){
-		if(remove(fileName)!=0){
-			error("error on get term delete");
-		}
-	}
 
 }
 
