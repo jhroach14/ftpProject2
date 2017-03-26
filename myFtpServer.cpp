@@ -224,7 +224,7 @@ int CommandQueue::isFileNameActive(string fileName) {
 
 int serverSocketSetup(const char *portNum);  //sets up a server socket
 void clientGetFile(Command*, int newSocketFd);
-void handleCommand(string input, int newSocketFd);//directs command to proper method for execution
+int handleCommand(string input, int newSocketFd);//directs command to proper method for execution
 void clientQuit( int newSocketFd);
 void clientCd(string input);
 void clientDelete(string input);
@@ -507,7 +507,7 @@ void handleSpecialCommand(Command* command, CommandQueue* commandQueue, int newT
 
 }
 
-void handleCommand(string input, int newSocketFd){
+int handleCommand(string input, int newSocketFd){
 
 
 	int savedStdout;

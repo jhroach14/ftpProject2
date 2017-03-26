@@ -22,7 +22,7 @@ int responseNeeded(string input);
 void handleCommand(string input, int socketFd,char* argv[]);
 int clientSocketSetup(char *argv[],int);
 
-void getResponse(int socketFd);
+void getResponse(int socketFd, string);
 
 void error(string output);
 
@@ -34,7 +34,7 @@ void getGPResponse(int socketFd);
 
 void terminateCommand(char*argv[],string input);
 
-int debug = 1;
+int debug = 0;
 
 int main(int argc, char *argv[]){
 
@@ -112,7 +112,13 @@ void handleCommand(string input, int socketFd,char* argv[]){
 		if(needResponse) {
 
 			log("executing command requiring response");
-			getResponse(socketFd);
+			string commandType;
+			if(!input.compare(0,2,"ls")){
+				commandType = "ls";
+			}else{
+				commandType = "pwd";
+			}
+			getResponse(socketFd,commandType);
 
 		}
 
@@ -131,9 +137,14 @@ void handleCommand(string input, int socketFd,char* argv[]){
 		log(ackBuf);
 		log("received background command ack");
 		if(needResponse) {
-
+			string commandType;
+			if(!input.compare(0,2,"ls")){
+				commandType = "ls";
+			}else{
+				commandType = "pwd";
+			}
 			log("executing command requiring response");
-			getResponse(socketFd);
+			getResponse(socketFd,commandType);
 
 		}
 
@@ -255,8 +266,14 @@ void putFileOnServer(string input, int socketFd){
 		}
 		recv(socketFd,ackBuf,3,0);//sync4
 		log(ackBuf);
+		string ack(ackBuf);
 
 		totalBytes +=numRead;
+
+		if(!ack.compare(0,3,"TRM")){
+			log("terminate recieved stopping put of "+ fileName);
+			break;
+		}
 
 		//check terminate
 
@@ -361,7 +378,7 @@ void getGPResponse(int socketFd){
 
 }
 
-void getResponse(int socketFd){
+void getResponse(int socketFd,string commandType){
 
 	char responseBuffer[256];
 	int bytesRead;
@@ -375,10 +392,29 @@ void getResponse(int socketFd){
 	responseBuffer[bytesRead] = '\0';
 	if(strcmp(responseBuffer, "ACK")!=0){//not ack means we need to wait
 
+		int hasAck =0;
 		for (int i = 0; i < bytesRead; i++) {
+			if(responseBuffer[i]=='A'&&responseBuffer[i+1]=='C'&&responseBuffer[i+2]=='K'){
+				hasAck = 1;
+				break;
+			}
 			printf("%c", responseBuffer[i]);
 		}
+
+		if(hasAck==0&&(!commandType.compare(0,2,"ls"))){
+
+			log("waiting for ack");
+			char ackBuf[3];
+			recv(socketFd,ackBuf,3,0);
+
+		}
+
 		log("recieved server response sending ack");
+		if(send(socketFd,"ACK",3,0)==-1){
+			error("response ack failed");
+		}
+	}else{
+		log("sending ack");
 		if(send(socketFd,"ACK",3,0)==-1){
 			error("response ack failed");
 		}

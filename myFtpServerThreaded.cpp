@@ -22,7 +22,7 @@
 using namespace std;
 
 //helper methods for user communication
-void fatal_error(string output); //print error to stdout stderr and exit
+void error(string output); //print error to stdout stderr and exit
 void error(string output);       //print error to stdout stderr
 void log(string message);       //log message to stdout
 
@@ -108,8 +108,9 @@ struct CommandQueue{
 
 	void insertCommand(Command*);
 	string checkCommandStatus(Command*);
-	void removeCommand(vector<Command*>,Command*);
+	void removeCommand(vector<Command*>&,Command*);
 	string terminateCommand(string input);
+	void printOut();
 
 private://internal helper methods
 	int isFileNameActive(string fileName);
@@ -117,6 +118,20 @@ private://internal helper methods
 	void insertPending(Command(*));
 
 };
+
+void CommandQueue::printOut() {
+
+	cout<<"ACTIVE QUEUE\n";
+	for(int i=0;i<activeCommands.size();i++){
+		cout<<"  "<<activeCommands.at(i)->getCommandId()<<'\n';
+	}
+
+	cout<<"PENDING QUEUE\n";
+	for(int i=0;i<pendingCommands.size();i++){
+		cout<<"  "<<pendingCommands.at(i)->getCommandId()<<'\n';
+	}
+
+}
 
 string CommandQueue::terminateCommand(string input) {
 
@@ -157,6 +172,7 @@ void CommandQueue::insertCommand(Command * command) {
 		insertPending(command);
 	}
 
+
 }
 
 void CommandQueue::insertActive(Command* command){
@@ -164,6 +180,7 @@ void CommandQueue::insertActive(Command* command){
 	log("Command with id "+command->getCommandId()+" inserted into active queue");
 	activeCommands.push_back(command);
 	command->status = "active";
+	printOut();
 }
 
 void CommandQueue::insertPending(Command* command){
@@ -171,20 +188,24 @@ void CommandQueue::insertPending(Command* command){
 	log("Command with id "+command->getCommandId()+" inserted into pending queue");
 	pendingCommands.push_back(command);
 	command->status = "pending";
+	printOut();
 }
 
 string CommandQueue::checkCommandStatus(Command * command) {
 
 	if(!command->status.compare("active")){
+		log("command status = active");
 		return command->status;
 	} else
 	if(!command->status.compare("pending")){
+		log("command status = pending");
 		if(isFileNameActive(command->filename) == 0){
 			log("moving command with id "+command->getCommandId()+" from pending queue to active queue");
 			removeCommand(pendingCommands, command);
 			insertActive(command);
 			return command->status;
 		} else{
+			log("command status staying pending for now");
 			return command->status;
 		}
 	}else{
@@ -193,16 +214,24 @@ string CommandQueue::checkCommandStatus(Command * command) {
 
 }
 
-void CommandQueue::removeCommand(vector<Command *> commandVector, Command * command) {
+void CommandQueue::removeCommand(vector<Command *> &commandVector, Command * command) {
 
-	vector<Command *>::iterator position = find(commandVector.begin(),commandVector.end(),command);
+	string commandID = command->getCommandId();
 
-	if(position!= commandVector.end()){
-		commandVector.erase(position);
-		log("command with id "+command->getCommandId()+" removed from command queue");
-	} else{
-		log("remove failed. command with id "+ command->getCommandId()+" ");
+	for(int i=0;i<commandVector.size();i++){
+
+		if(!(commandVector.at(i)->getCommandId()).compare(0,commandID.size(),commandID)){
+			commandVector.erase(commandVector.begin()+i);
+			log("command with id "+command->getCommandId()+" removed from command queue");
+			break;
+		}
+		if(i==(commandVector.size()-1)){
+			log("remove failed. command with id "+ command->getCommandId()+" ");
+		}
+
 	}
+
+	printOut();
 
 }
 
@@ -213,7 +242,6 @@ int CommandQueue::isFileNameActive(string fileName) {
 
 	for(int i=0; i<activeCommands.size();i++){
 		string potential = activeCommands.at(i)->filename;
-		log("comparing "+potential+" with "+fileName+" for active");
 		if(!potential.compare(fileName)){
 			isActive = 1;
 			log(fileName+" is active");
@@ -226,7 +254,7 @@ int CommandQueue::isFileNameActive(string fileName) {
 //utility methods
 int serverSocketSetup(const char *portNum);  //sets up a server socket
 void clientGetFile(Command*, int newSocketFd);
-void handleCommand(string input, int newSocketFd);//directs command to proper method for execution
+int handleCommand(string input, int newSocketFd);//directs command to proper method for execution
 void clientQuit( int newSocketFd);
 void clientCd(string input);
 void clientDelete(string input);
@@ -276,7 +304,7 @@ int main(int argc, char *argv[]) {
 		log("main server thread waiting for connection");
 
 		if((newSocketFd = accept(socketFd,(struct sockaddr*)&clientAddress, &socketLength))==-1){
-			fatal_error("accept error");
+			error("accept error");
 		}
 
 		log("connection accepted. creating thread to handle client requests");
@@ -300,7 +328,7 @@ void executeConnectionLoop(int newSocketFd, CommandQueue* commandQueue, char * a
 
 		log("client request thread waiting for request");
 		if((readLength = recv(newSocketFd,buffer,256,0))==-1){//receive command from socket into buffer
-			fatal_error("CHILD read error");
+			error("CHILD read error");
 		}
 
 		log("received command sending ack to client");
@@ -310,6 +338,8 @@ void executeConnectionLoop(int newSocketFd, CommandQueue* commandQueue, char * a
 
 		buffer[readLength]='\0';
 		string input(buffer);//use buffer to create a string holding input
+
+		log("client request = "+input);
 
 		if(!input.compare(0,3,"get") || !input.compare(0,3,"put")){//file transfers
 
@@ -344,7 +374,7 @@ void executeConnectionLoop(int newSocketFd, CommandQueue* commandQueue, char * a
 				log("waiting for background transfer connection ");
 				int newBackgroundSocketFd;
 				if((newBackgroundSocketFd = accept(backgroundSocketInfo->fd,(struct sockaddr*)&clientAddress, &socketLength))==-1){
-					fatal_error("accept error");
+					error("accept error");
 				}
 
 				log("background transfer connection accepted. creating thread to handle background transfer");
@@ -395,7 +425,7 @@ void executeConnectionLoop(int newSocketFd, CommandQueue* commandQueue, char * a
 		}
 		else{
 
-			handleCommand(input,newSocketFd);
+			saftey += handleCommand(input,newSocketFd);
 
 		}
 
@@ -425,7 +455,7 @@ void executeTerminateLoop(int termSocketFd, CommandQueue *commandQueue){
 		log("terminate thread waiting for connection");
 
 		if((newTermSocketFd = accept(termSocketFd,(struct sockaddr*)&clientAddress, &socketLength))==-1){
-			fatal_error("accept error");
+			error("accept error");
 		}
 
 		log("term connection accepted. Starting thread to handle terminate command");
@@ -443,7 +473,7 @@ void executeTerminateChild(int newTermSocketFd, CommandQueue* commandQueue){
 	char buffer[256];
 	int readLength;
 	if((readLength = recv(newTermSocketFd,buffer,256,0))==-1){//receive command from socket into buffer
-		fatal_error("TERMCHILD read error");
+		error("TERMCHILD read error");
 	}
 	buffer[readLength]='\0';
 
@@ -466,13 +496,16 @@ void executeTerminateChild(int newTermSocketFd, CommandQueue* commandQueue){
 
 void handleSpecialCommand(Command* command, CommandQueue* commandQueue, int newTermSocketFd){
 
-	log("CHILD command: "+command->getCommandId());
+	log("handling get put for command "+command->getCommandId());
 
 	int done = 0;
+	int saftey =0;
 	//Client requests file
 	if(!command->action.compare("get")){
 
-		while(done != 1) {
+		while(done != 1&&saftey<65) {
+
+			saftey++;
 
 			if(!commandQueue->checkCommandStatus(command).compare("active")) {
 
@@ -485,7 +518,7 @@ void handleSpecialCommand(Command* command, CommandQueue* commandQueue, int newT
 				done = 1;
 				commandQueue->removeCommand(commandQueue->pendingCommands,command);
 			}else{
-				usleep(1000);
+				usleep(1500000);
 			}
 		}
 
@@ -504,7 +537,7 @@ void handleSpecialCommand(Command* command, CommandQueue* commandQueue, int newT
 				done = 1;
 				commandQueue->removeCommand(commandQueue->pendingCommands,command);
 			}else{
-				usleep(1000);
+				usleep(150000);
 			}
 		}
 
@@ -513,21 +546,19 @@ void handleSpecialCommand(Command* command, CommandQueue* commandQueue, int newT
 
 }
 
-void handleCommand(string input, int newSocketFd){
+int handleCommand(string input, int newSocketFd){
 
 
 	int savedStdout;
 	int savedStderr;
-
-	log("CHILD input: "+input);
+	int hasQuit =0;
 
 	/*savedStderr = dup(STDERR_FILENO);
 	dup2(newSocketFd, STDERR_FILENO);*/
 
 	if(!input.compare("quit")){
 		clientQuit(newSocketFd);
-		close(newSocketFd);
-		exit(EXIT_SUCCESS);
+		hasQuit = 65;
 	}
 
 	//Changes directory
@@ -538,7 +569,7 @@ void handleCommand(string input, int newSocketFd){
 	// Redirects Standard output into socket then runs ls on server side
 	if(!input.compare("ls")){
 
-		log("CHILD running ls");
+		log("running ls");
 
 		savedStdout = dup(1);
 		close(1);
@@ -548,6 +579,10 @@ void handleCommand(string input, int newSocketFd){
 			error("ls failed");
 		}
 		dup2(savedStdout,1);
+
+		if(send(newSocketFd,"ACK",3,0)==-1){
+			error("response ack failed");
+		}
 
 		log("ls output sent waiting for ack");
 		char ackBuf[3];
@@ -559,7 +594,7 @@ void handleCommand(string input, int newSocketFd){
 	// Redirects Standard output into socket then runs pwd on server side
 	if (!input.compare("pwd")){
 
-		log("CHILD running pwd");
+		log("running pwd");
 
 		savedStdout = dup(1);
 		close(1);
@@ -579,7 +614,7 @@ void handleCommand(string input, int newSocketFd){
 	// makes new directory on FTP server
 	if(!input.compare(0,5,"mkdir")){
 
-		log("CHILD running mkdir");
+		log("running mkdir");
 		if(system(input.c_str())==-1){
 			error("mkdir failed");
 		}
@@ -587,6 +622,7 @@ void handleCommand(string input, int newSocketFd){
 	}
 
 	/*dup2(savedStderr,STDERR_FILENO);*/
+	return hasQuit;
 
 }
 
@@ -624,7 +660,6 @@ void clientQuit( int newSocketFd){
 
 	log("CHILD quit");
 	close(newSocketFd);
-	exit(EXIT_SUCCESS);
 
 }
 
@@ -642,7 +677,7 @@ int serverSocketSetup(const char *portNum){
 	int code;
 	if((code=getaddrinfo(NULL,portNum,&prepInfo,&serverInfo))!=0){//uses prep info to fill server info
 		cout<<gai_strerror(code)<<'\n';
-		fatal_error("Error on addr info port");
+		error("Error on addr info port");
 	}
 
 	log("addr info success");
@@ -666,11 +701,11 @@ int serverSocketSetup(const char *portNum){
 	}
 
 	if(socketFd == -1){
-		fatal_error("socket creation failed");
+		error("socket creation failed");
 	}
 
 	if(listen(socketFd, 5) == -1){
-		fatal_error("error on listen");
+		error("error on listen");
 	}
 	log("socket listening");
 
@@ -694,7 +729,7 @@ BackgroundSocketInfo* serverBackgroundSocketSetup(const char *portNum) {
 		int code;
 		if ((code = getaddrinfo(NULL, "0", &prepInfo, &serverInfo)) != 0) {//uses prep info to fill server info
 			cout << gai_strerror(code) << '\n';
-			fatal_error("Error on addr info port");
+			error("Error on addr info port");
 		}
 
 		log("addr info success");
@@ -719,11 +754,11 @@ BackgroundSocketInfo* serverBackgroundSocketSetup(const char *portNum) {
 	}
 
 	if (socketFd == -1) {
-		fatal_error("socket creation failed");
+		error("socket creation failed");
 	}
 
 	if (listen(socketFd, 5) == -1) {
-		fatal_error("error on listen");
+		error("error on listen");
 	}
 	log("socket listening");
 
@@ -791,10 +826,23 @@ void clientPutFile(Command* command, int newSocketFd){
 	while(size>0){
 
 		len = recv(newSocketFd, receiveBuffer, 1024, 0);//sync3
+
+		if(!command->status.compare("terminate")){
+			hasTerminated = 1;
+			if(send( newSocketFd, "TRM", 3, 0) < 0){//sync4
+				error("error sending file");
+			}
+
+		}else
 		if(send( newSocketFd, "ACK", 3, 0) < 0){//sync4
 			error("error sending file");
 		}
 		totalBytes+=len;
+
+		if(hasTerminated==1){
+			break;
+		}
+
 		fwrite(receiveBuffer, sizeof(char), len, receiveFile);
 		log(to_string(len)+" bytes received and written");
 
@@ -802,13 +850,8 @@ void clientPutFile(Command* command, int newSocketFd){
 
 		bzero(receiveBuffer,1024);
 
-		if(!command->status.compare("terminate")){
-			hasTerminated = 1;
-			break;
-		}
-
-		log("sleeping 4 sec to help debug concurrency");
-		usleep(4000);
+		log("sleeping 1 sec inorder to more easily demo concurrency without large file sizes");
+		usleep(1000000);
 
 	}
 
@@ -871,7 +914,7 @@ void clientGetFile(Command *command, int newSocketFd) {
 			}
 			break;
 		}
-		log("sleeping to help debug concurrency");
+		log("sleeping 1 sec inorder to more easily demo concurrency without large file sizes");
 		usleep(1000000);
 	}
 
@@ -883,14 +926,6 @@ void clientGetFile(Command *command, int newSocketFd) {
 // user communication methods
 void log(string message){
 	cout << "LOG: " << message << '\n';
-}
-
-void fatal_error(string output){
-
-	perror(strerror(errno));
-	cout<<"\n"<<output<<'\n';
-	exit(EXIT_FAILURE);
-
 }
 
 void error(string output){
