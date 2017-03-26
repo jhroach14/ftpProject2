@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <sstream>
 #include <time.h>
+#include <thread>
 
 using namespace std;
 
@@ -110,7 +111,7 @@ struct CommandQueue{
 	void removeCommand(vector<Command*>,Command*);
 	string terminateCommand(string input);
 
-	private://internal helper methods
+private://internal helper methods
 	int isFileNameActive(string fileName);
 	void insertActive(Command(*));
 	void insertPending(Command(*));
@@ -222,6 +223,7 @@ int CommandQueue::isFileNameActive(string fileName) {
 	return isActive;
 }
 
+//utility methods
 int serverSocketSetup(const char *portNum);  //sets up a server socket
 void clientGetFile(Command*, int newSocketFd);
 void handleCommand(string input, int newSocketFd);//directs command to proper method for execution
@@ -230,8 +232,13 @@ void clientCd(string input);
 void clientDelete(string input);
 void clientPutFile(Command*, int newSocketFd);
 void handleSpecialCommand(Command* command,CommandQueue*, int newTermSocketFd);
-
 BackgroundSocketInfo* serverBackgroundSocketSetup(const char *portNum);
+
+//thread execution logic paths
+void executeTerminateLoop(int termSocketFd, CommandQueue *commandQueue);
+void executeTerminateChild(int newTermSocketFd, CommandQueue* commandQueue);
+void executeConnectionLoop(int newSocketFd, CommandQueue* commandQueue, char * argv[], sockaddr_storage clientAddress, socklen_t socketLength);
+void executeBackgroundTransfer(Command * command, CommandQueue* commandQueue, int newBackgroundSocketFd);
 
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wmissing-noreturn"
@@ -243,220 +250,219 @@ int main(int argc, char *argv[]) {
 	int newSocketFd;
 
 	int termSocketFd; //terminate channel
-	int newTermSocketFd;
+
 
 	//ensure we get a port number
-	if(argc == 3 ){
+	if (argc == 3) {
 
 		socketFd = serverSocketSetup(argv[1]);//handles all code needed to create a server socket
 		termSocketFd = serverSocketSetup(argv[2]);
 
-	}else{
+	} else {
 		cout << "Invalid server startup args. usage: portNumber terminatePortNumber\n";
 		return -1;
 	}
 
-	CommandQueue* commandQueue = new CommandQueue();
+	CommandQueue *commandQueue = new CommandQueue();//main data structure to handle concurrency
 
 	log("starting terminate thread");
-	int termPid = fork();
+	thread terminateThread(executeTerminateLoop, termSocketFd, commandQueue);
+	terminateThread.detach();//dont want to have to wait for it to finish
 
-	if(termPid == 0){//terminate child
-		close(socketFd);
-		while(true){
+	while(true){//main server loop
 
-			struct sockaddr_storage clientAddress;
-			socklen_t socketLength = sizeof(clientAddress);
+		struct sockaddr_storage clientAddress;
+		socklen_t socketLength = sizeof(clientAddress);
+		log("main server thread waiting for connection");
 
-			log("terminate thread waiting for connection");
+		if((newSocketFd = accept(socketFd,(struct sockaddr*)&clientAddress, &socketLength))==-1){
+			fatal_error("accept error");
+		}
 
-			if((newTermSocketFd = accept(termSocketFd,(struct sockaddr*)&clientAddress, &socketLength))==-1){
-				fatal_error("accept error");
+		log("connection accepted. creating thread to handle client requests");
+		thread connectionThread(executeConnectionLoop, newSocketFd, commandQueue, argv, clientAddress, socketLength);
+		connectionThread.detach();//dont want to deal with it after this
+
+	}//main loop
+
+}
+
+//utility methods to abstract logic from the main method
+
+void executeConnectionLoop(int newSocketFd, CommandQueue* commandQueue, char * argv[], sockaddr_storage clientAddress, socklen_t socketLength){
+
+	int saftey=0;
+	while(saftey<65){//main child loop
+
+		saftey++;
+		char buffer[256];
+		int readLength;
+
+		log("client request thread waiting for request");
+		if((readLength = recv(newSocketFd,buffer,256,0))==-1){//receive command from socket into buffer
+			fatal_error("CHILD read error");
+		}
+
+		log("received command sending ack to client");
+		if(send( newSocketFd, "ACK", 3, 0) < 0){//ack portnum
+			error("error ack portnum");
+		}
+
+		buffer[readLength]='\0';
+		string input(buffer);//use buffer to create a string holding input
+
+		if(!input.compare(0,3,"get") || !input.compare(0,3,"put")){//file transfers
+
+			Command * command = new Command(input);
+			commandQueue->insertCommand(command);
+			log("sending commandID to client");
+			if(send(newSocketFd,command->getCommandId().c_str(),command->getCommandId().size(),0)==-1){
+				error("error on commandID send");
 			}
 
-			log("term connection accepted. forking child to handle terminate");
-			int pid = fork();
+			log("waiting for commandID ack");
+			char ackBuf[3];
+			recv(newSocketFd,ackBuf,3,0);//commandID ack
+			log(ackBuf);
+			log("recieved commandID ack");
 
-			if(pid == 0){//child
+			if(input.find('&',0)!=string::npos){//if background transfer
 
-				log("TERMCHILD says helloWorld");
+				log("background transfer inititated");
 
-				close(termSocketFd);//child has no use for parent's socket
-
-				char buffer[256];
-				int readLength;
-				if((readLength = recv(newTermSocketFd,buffer,256,0))==-1){//receive command from socket into buffer
-					fatal_error("TERMCHILD read error");
-				}
-				buffer[readLength]='\0';
-
-				string input(buffer);//use buffer to create a string holding input
-				log("terminate received: "+input);
-
-				if(!input.compare(0,9,"terminate")){
-
-					string response = commandQueue->terminateCommand(input);
-
-					if(send(newTermSocketFd,response.c_str(),response.size(),0) ==-1){
-						error("error on term response");
-					}
-
-				}else{
-					error("invalid term command");
+				BackgroundSocketInfo* backgroundSocketInfo = serverBackgroundSocketSetup(argv[2]);
+				log("sending port number");
+				if(send(newSocketFd,backgroundSocketInfo->portnum,4,0)==-1){
+					error("error on portnum send");
 				}
 
-				exit(EXIT_SUCCESS);
-			}// end termchild
+				log("waiting for portnum ack");
+				recv(newSocketFd,ackBuf,3,0);//sync2
+				log(ackBuf);
+				log("received portnum ack");
 
-			close(newTermSocketFd);
+				log("waiting for background transfer connection ");
+				int newBackgroundSocketFd;
+				if((newBackgroundSocketFd = accept(backgroundSocketInfo->fd,(struct sockaddr*)&clientAddress, &socketLength))==-1){
+					fatal_error("accept error");
+				}
 
-		}//end termloop
+				log("background transfer connection accepted. creating thread to handle background transfer");
+				thread backgroundTransferThread(executeBackgroundTransfer, command, commandQueue, newBackgroundSocketFd);
+				backgroundTransferThread.detach();
 
-	}else{//parent
-		close(termSocketFd);
-		while(true){//main server loop
 
-			struct sockaddr_storage clientAddress;
-			socklen_t socketLength = sizeof(clientAddress);
-			log("main server thread waiting for connection");
-
-			if((newSocketFd = accept(socketFd,(struct sockaddr*)&clientAddress, &socketLength))==-1){
-				fatal_error("accept error");
+			}else{
+				handleSpecialCommand(command,commandQueue,newSocketFd);
 			}
 
-			log("connection accepted. forking child to handle requests");
-			int pid = fork();
+		} else
+		if(!input.compare(0,6,"delete")){
 
-			if(pid == 0){//child
+			int index = input.find(" ");
+			string filepath = input.substr(index+1);
 
-				log("CHILD says helloWorld");
+			log("delete requested on file "+filepath);
 
-				close(socketFd);//child has no use for parent's socket
-				int saftey=0;
-				while(saftey<65){//main child loop
-					saftey++;
-					char buffer[256];
-					int readLength;
-					if((readLength = recv(newSocketFd,buffer,256,0))==-1){//receive command from socket into buffer
-						fatal_error("CHILD read error");
-					}
-					log("received command sending ack to client");
-					if(send( newSocketFd, "ACK", 3, 0) < 0){//ack portnum
-						error("error ack portnum");
-					}
-					buffer[readLength]='\0';
-
-					string input(buffer);//use buffer to create a string holding input
-
-					if(!input.compare(0,3,"get") || !input.compare(0,3,"put")){//handle delete
-
-						Command * command = new Command(input);
-						commandQueue->insertCommand(command);
-						log("sending commandID to client");
-						if(send(newSocketFd,command->getCommandId().c_str(),command->getCommandId().size(),0)==-1){
-							error("error on commandID send");
-						}
-
-						log("waiting for commandID ack");
-						char ackBuf[3];
-						recv(newSocketFd,ackBuf,3,0);//commandID ack
-						log(ackBuf);
-						log("recieved commandID ack");
-
-						if(input.find('&',0)!=string::npos){//if background transfer
-
-							log("background transfer inititated");
-
-							BackgroundSocketInfo* backgroundSocketInfo = serverBackgroundSocketSetup(argv[2]);
-							log("sending port number");
-							if(send(newSocketFd,backgroundSocketInfo->portnum,4,0)==-1){
-								error("error on portnum send");
-							}
-							log("waiting for portnum ack");
-							recv(newSocketFd,ackBuf,3,0);//sync2
-							log(ackBuf);
-							log("received portnum ack");
-							log("waiting for background transfer connection ");
-
-							int newBackgroundSocketFd;
-							if((newBackgroundSocketFd = accept(backgroundSocketInfo->fd,(struct sockaddr*)&clientAddress, &socketLength))==-1){
-								fatal_error("accept error");
-							}
-
-							log("background transfer connection accepted");
-
-							int backgroundpid = fork();
-
-							if(backgroundpid==0) {
-								close(newSocketFd);
-								close(backgroundSocketInfo->fd);
-								handleSpecialCommand(command, commandQueue, newBackgroundSocketFd);
-								close(newBackgroundSocketFd);
-								exit(EXIT_SUCCESS);
-							}
-
-
-						}else{
-							handleSpecialCommand(command,commandQueue,newSocketFd);
-						}
-
-					} else
-					if(!input.compare(0,6,"delete")){
-
-						int index = input.find(" ");
-						string filepath = input.substr(index+1);
-
-						log("delete requested on file "+filepath);
-
-						int whereIsIt=0;
-						Command* command;
-						for(int i=0;i<commandQueue->activeCommands.size();i++){
-							if(commandQueue->activeCommands.at(i)->filename.compare(filepath)){
-								whereIsIt=1;
-								command = commandQueue->activeCommands.at(i);
-								log("file to be deleted is in active queue");
-							}
-						}
-						if(whereIsIt!=1){
-
-							for(int i=0;i<commandQueue->pendingCommands.size();i++){
-								if(commandQueue->pendingCommands.at(i)->filename.compare(filepath)){
-									whereIsIt=1;
-									command = commandQueue->pendingCommands.at(i);
-									log("file to be deleted is in pending queue");
-								}
-							}
-						}
-
-						if(whereIsIt == 0){
-							log("client to be deleted is in no queue's");
-							clientDelete(input);
-						} else
-						if(whereIsIt == 1){
-							command->terminateCommand();
-						}
-
-					}
-					else{
-
-						handleCommand(input,newSocketFd);
-
-					}
-
+			int whereIsIt=0;
+			Command* command;
+			for(int i=0;i<commandQueue->activeCommands.size();i++){
+				if(commandQueue->activeCommands.at(i)->filename.compare(filepath)){
+					whereIsIt=1;
+					command = commandQueue->activeCommands.at(i);
+					log("file to be deleted is in active queue");
 				}
+			}
+			if(whereIsIt!=1){
 
-			}// end child
+				for(int i=0;i<commandQueue->pendingCommands.size();i++){
+					if(commandQueue->pendingCommands.at(i)->filename.compare(filepath)){
+						whereIsIt=1;
+						command = commandQueue->pendingCommands.at(i);
+						log("file to be deleted is in pending queue");
+					}
+				}
+			}
 
-			close(newSocketFd);//parent does not need
+			if(whereIsIt == 0){
+				log("client to be deleted is in no queue's");
+				clientDelete(input);
+			} else
+			if(whereIsIt == 1){
+				command->terminateCommand();
+			}
 
-		}//main loop
+		}
+		else{
+
+			handleCommand(input,newSocketFd);
+
+		}
 
 	}
 
-}
-#pragma clang diagnostic pop
+}// end child
 
-//utility methods to abstract logic from the main method
+void executeBackgroundTransfer(Command * command, CommandQueue* commandQueue, int newBackgroundSocketFd){
+
+
+	handleSpecialCommand(command, commandQueue, newBackgroundSocketFd);
+	close(newBackgroundSocketFd);
+
+}
+
+
+void executeTerminateLoop(int termSocketFd, CommandQueue *commandQueue){
+
+
+	int newTermSocketFd;
+
+	while(true){
+
+		struct sockaddr_storage clientAddress;
+		socklen_t socketLength = sizeof(clientAddress);
+
+		log("terminate thread waiting for connection");
+
+		if((newTermSocketFd = accept(termSocketFd,(struct sockaddr*)&clientAddress, &socketLength))==-1){
+			fatal_error("accept error");
+		}
+
+		log("term connection accepted. Starting thread to handle terminate command");
+		thread childTerminateThread(executeTerminateChild, newTermSocketFd, commandQueue);
+		childTerminateThread.detach();//dont wait for return
+
+	}//end termloop
+
+}
+
+void executeTerminateChild(int newTermSocketFd, CommandQueue* commandQueue){
+
+	log("terminate child says helloWorld");
+
+	char buffer[256];
+	int readLength;
+	if((readLength = recv(newTermSocketFd,buffer,256,0))==-1){//receive command from socket into buffer
+		fatal_error("TERMCHILD read error");
+	}
+	buffer[readLength]='\0';
+
+	string input(buffer);//use buffer to create a string holding input
+	log("terminate received: "+input);
+
+	if(!input.compare(0,9,"terminate")){
+
+		string response = commandQueue->terminateCommand(input);
+
+		if(send(newTermSocketFd,response.c_str(),response.size(),0) ==-1){
+			error("error on term response");
+		}
+
+	}else{
+		error("invalid term command");
+	}
+
+}
 
 void handleSpecialCommand(Command* command, CommandQueue* commandQueue, int newTermSocketFd){
 
@@ -728,7 +734,7 @@ BackgroundSocketInfo* serverBackgroundSocketSetup(const char *portNum) {
 	if (getsockname(socketFd, (struct sockaddr *) &sin, &len) == -1){
 		error("getsockname");
 	}else{
-	port = to_string(ntohs(sin.sin_port));
+		port = to_string(ntohs(sin.sin_port));
 	}
 
 	return new BackgroundSocketInfo(socketFd,port.c_str());
@@ -893,4 +899,3 @@ void error(string output){
 	cout<<"\n"<<output<<'\n';
 
 }
-
