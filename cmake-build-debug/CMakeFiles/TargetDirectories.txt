@@ -1,0 +1,5 @@
+/home/User/cs4780/ftpProject2/cmake-build-debug/CMakeFiles/edit_cache.dir
+/home/User/cs4780/ftpProject2/cmake-build-debug/CMakeFiles/Client.dir
+/home/User/cs4780/ftpProject2/cmake-build-debug/CMakeFiles/rebuild_cache.dir
+/home/User/cs4780/ftpProject2/cmake-build-debug/CMakeFiles/ServerThreaded.dir
+/home/User/cs4780/ftpProject2/cmake-build-debug/CMakeFiles/Server.dir

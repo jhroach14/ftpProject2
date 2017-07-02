@@ -45,7 +45,6 @@ BackgroundSocketInfo::BackgroundSocketInfo(int fd, const char* portChar) {
 struct Command {//data structure for command scheduling
 	string action;
 	string filename;
-	pid_t pid;
 	string status;//null, pending, active, terminate
 	string createTime;
 

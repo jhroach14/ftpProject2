@@ -1,0 +1,4 @@
+C:\Users\User\.CLion2016.3\system\cygwin_cmake\bin\cmake.exe -DCMAKE_BUILD_TYPE=Debug -G "CodeBlocks - Unix Makefiles" /home/User/cs4780/ftpProject2
+-- Configuring done
+-- Generating done
+-- Build files have been written to: /home/User/cs4780/ftpProject2/cmake-build-debug

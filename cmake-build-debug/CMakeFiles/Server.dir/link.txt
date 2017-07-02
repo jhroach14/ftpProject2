@@ -1,0 +1,1 @@
+/usr/bin/c++.exe   -std=c++11 -g  -Wl,--enable-auto-import CMakeFiles/Server.dir/myFtpServer.cpp.o  -o Server.exe -Wl,--out-implib,libServer.dll.a -Wl,--major-image-version,0,--minor-image-version,0  
